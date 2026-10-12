@@ -120,6 +120,9 @@ config.funboxSandbox ??= {
   intervalSeconds: 5
 };
 config.funboxSandbox.enabled ??= false;
+Object.defineProperty(config.funboxSandbox, 'enabled', {
+  enumerable: true, get: () => false, set: () => {}
+});
 config.funboxSandbox.intervalSeconds = Math.max(2, Number(config.funboxSandbox.intervalSeconds) || 5);
 config.notifications ??= {
   facebook: 'discord',
@@ -508,7 +511,7 @@ config.productKeywords ??= ['戰鬥陀螺', 'BEYBLADE'];
 config.salesKeywords ??= ['抽選', '販售', '報名', '到貨', '補貨', '開賣', '現貨', '售完', '售罄'];
 config.hotspot ??= {
   enabled: true,
-  pageUrl: 'https://www.facebook.com/profile.php?id=61590975990981',
+  pageUrl: '',
   activeHours: { start: '10:00', end: '21:00' },
   intervalSeconds: 60,
   pageLoadSeconds: 4,
@@ -830,19 +833,6 @@ const shoppingSiteMonitor = new ShoppingSiteMonitor({
     args: ['--disable-blink-features=AutomationControlled']
   }))
 });
-const esliteCx19Seed = shoppingSiteMonitor.esliteManualProducts()
-  .find((product) => product.id === '10042014802683232221009');
-if (!esliteCx19Seed || !esliteCx19Seed.imageUrl) {
-  await shoppingSiteMonitor.addEsliteManualProduct(
-    'https://www.eslite.com/product/10042014802683232221009',
-    {
-      title: 'BEYBLADE X戰鬥陀螺/ CX-19/ 鱷魚裂甲',
-      imageUrl: 'https://s2.eslite.com/unsafe/fit-in/x240/smart/filters:sharpen(sigma):format(webp)/s.eslite.com/b2b/vendor/vendor178962805493120260917145416/mainCoverImage1_1717420.jpg',
-      price: 'NT$350',
-      ...(!esliteCx19Seed ? { available: false, status: '無法購買' } : {})
-    }
-  );
-}
 const japanAuctionMonitor = new JapanAuctionMonitor({
   dataDir,
   state,
@@ -1153,7 +1143,7 @@ function selectedFormAutoFillWorkers() {
 async function closeAllFormAutoFillWorkers() {
   await Promise.all([...formAutoFillWorkers.values()].map((worker) => worker.close()));
 }
-const TAIMALL_TEST_PAGE_URL = 'https://www.facebook.com/profile.php?id=61591565777499';
+const TAIMALL_TEST_PAGE_URL = '';
 const watcher = new Watcher({
   config,
   scanner,
@@ -2275,203 +2265,23 @@ async function runManualJapanScan() {
 }
 
 async function runJapanUx15NotificationTest() {
-  const { text, options, product } = japanAuctionTestNotification();
-  const messageId = await sendNotification(text, {
-    ...options,
-    channelMode: 'discord',
-    discordAudience: 'japan'
-  });
-  const destination = await checkDiscordConnection('japan');
-  const messageUrl = destination.guildId && destination.channelId && messageId
-    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
-    : '';
-  log(`1999.co.jp UX-15 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
-  return {
-    message: '1999.co.jp UX-15 測試通知已送到日本拍賣 Discord。',
-    messageId: messageId || '',
-    messageUrl,
-    destination,
-    product
-  };
+  throw new Error('發佈版本不包含演練資料');
 }
 
-async function runAmazonJpNotificationTest(body = {}) {
-  const { text, options, product } = amazonJapanTestNotification(body, amazonJapanMonitor.status().manualProducts);
-  const messageId = await sendNotification(text, {
-    ...options,
-    channelMode: 'discord',
-    discordAudience: 'japan'
-  });
-  log(`日亞官方原價 ${product.code} 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
-  return { message: `日亞官方原價 ${product.code} 測試通知已送到日本拍賣 Discord。`, messageId: messageId || '', product };
+async function runAmazonJpNotificationTest() {
+  throw new Error('發佈版本不包含演練資料');
 }
 
 async function runLiveFunboxProductNotificationTest() {
-  const response = await fetch(FUNBOX_LIVE_TEST_URL, {
-    headers: {
-      Accept: 'application/json',
-      'Accept-Language': 'zh-TW,zh;q=0.9',
-      'Cache-Control': 'no-cache',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36'
-    },
-    signal: AbortSignal.timeout(20000)
-  });
-  if (!response.ok) throw new Error(`Funbox 正式商品測試 HTTP ${response.status}`);
-  const products = parseFunboxResponse(await response.text(), FUNBOX_LIVE_TEST_URL);
-  const product = products.find((item) =>
-    item.title && item.url && item.imageUrl && item.price && item.stock !== null
-  );
-  if (!product) throw new Error('正式官網目前沒有可完整驗證名稱、圖片、價格與庫存的測試商品');
-
-  const messageId = await sendNotification(
-    `🧪 正式官網商品資料測試（不是真實陀螺上架）\n\n${formatFunboxNotification(product)}`,
-    {
-      discordPreview: funboxDiscordPreview(product, { test: true }),
-      embeds: [funboxEmbed(product, { test: true })],
-      channelMode: config.notifications.funbox
-    }
-  );
-  log(`Funbox 正式商品資料測試已通知：${product.title}${messageId ? `｜${messageId}` : ''}`, 'funbox');
-  return {
-    message: `測試推播已送出：${product.title}｜庫存 ${product.stock}｜不會寫入陀螺監控基線`,
-    product: {
-      id: product.id,
-      title: product.title,
-      price: product.price,
-      stock: product.stock,
-      imageUrl: product.imageUrl,
-      url: product.url
-    },
-    messageId
-  };
+  throw new Error('發佈版本不包含演練資料');
 }
 
 async function runFunboxPurchaseNotificationTest() {
-  const product = {
-    id: 'test-notification-ux21',
-    title: 'BEYBLADE X 戰鬥陀螺 UX-21 惡魔冥界改造組',
-    url: 'https://shop.funbox.com.tw/products/bb08554'
-  };
-  const message = formatFunboxAccountPurchaseNotification(product, {
-    slot: 'B', ok: true, status: 'ordered', purchaseStatus: 'success', quantity: 1,
-    payment: 'virtual_atm_home',
-    orderNumber: 'TEST-NOTIFICATION-NO-ORDER',
-    paymentUrl: 'https://shop.funbox.com.tw/orders/test-notification-no-order',
-    resultUrl: 'https://shop.funbox.com.tw/orders/test-notification-no-order',
-    paymentDeadline: '測試通知，不需付款', durationMs: 8275, attempts: 1,
-    products: [product],
-    productResults: [{ product, quantity: 1, status: 'ordered' }]
-  });
-  const messageId = await sendNotification(
-    `🧪 測試通知（不會建立訂單）\n\n${message.text}`,
-    {
-      channelMode: 'discord', discordAudience: 'private',
-      discordPreview: `🧪 ${message.preview}`
-    }
-  );
-  const destination = await checkDiscordConnection('private');
-  const messageUrl = destination.guildId && destination.channelId && messageId
-    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
-    : '';
-  log(`Funbox 自動購買結果樣式測試已送到私人 Discord${messageId ? `｜${messageId}` : ''}`, 'funbox');
-  return {
-    message: 'Funbox 自動購買結果樣式已送到私人 Discord；沒有建立訂單。',
-    messageId: messageId || '', messageUrl, destination
-  };
+  throw new Error('發佈版本不包含演練資料');
 }
 
-async function runSimulatedRestockNotificationTest(body = {}) {
-  if (body.type === 'facebook') throw new Error('Facebook 已封存：1010FB暫存');
-  if (body.type === 'shopee') {
-    const audience = body.audience === 'private' ? 'private' : 'public';
-    const result = await shopee.test(audience);
-    log(`蝦皮 FUNBOX 模擬通知已送到${audience === 'private' ? '私人管理' : '公開情報'}頻道｜${result.messageId}`);
-    return {...result, routedAudience: audience};
-  }
-  const type = ['mmtoy', 'shopping', 'funbox', 'facebook'].includes(String(body.type))
-    ? String(body.type)
-    : 'mmtoy';
-  const requestedAudience = body.audience === 'private' ? 'private' : 'public';
-  const discordAudience = requestedAudience === 'private'
-    ? 'private'
-    : type === 'mmtoy' ? 'mmtoy' : 'public';
-  let text;
-  let embed;
-
-  if (type === 'funbox') {
-    const product = normalizeFunboxSimulationProduct(body.funbox || body);
-    text = funboxDiscordPreview(product, { test: true });
-    embed = funboxEmbed(product, { test: true });
-  } else if (type === 'facebook') {
-    const url = 'https://www.facebook.com/';
-    text = '🧪 FB 模擬通知｜方爸測試\n戰鬥陀螺販售情報｜點擊查看貼文';
-    embed = {
-      author: { name: '陀螺通知監控儀表・FB 販售情報', url },
-      title: '🧪 戰鬥陀螺販售情報（模擬）',
-      url,
-      color: 0x3c82f6,
-      description: '**店家：** 方爸測試\n**關鍵字：** 戰鬥陀螺、販售、表單\n\n**原文：** [查看 Facebook 貼文](https://www.facebook.com/)',
-      footer: { text: '模擬通知・不是真實貼文' },
-      timestamp: new Date().toISOString()
-    };
-  } else {
-    const mmtoy = type === 'mmtoy';
-    const target = mmtoy ? {
-      name: 'MM小舖戰鬥陀螺專區',
-      siteName: 'MM小舖',
-      url: 'https://mmtoyshop.com/category/%F0%9F%8C%80%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA',
-      sourceType: 'mmtoy-category'
-    } : {
-      name: '墊腳石 TAKARA TOMY 專區',
-      siteName: 'momo購物網',
-      url: 'https://www.momoshop.com.tw/TP/TP0002451/main'
-    };
-    const product = mmtoy ? {
-      id: 'simulation-mmtoy-ux16',
-      title: '【M.M小舖】『預購』 9月 TAKARA TOMY 戰鬥陀螺 UX-16 時鐘幻象 隨機強化組 對戰 復古 熱血',
-      url: 'https://mmtoyshop.com/category/%F0%9F%8C%80%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA',
-      price: 'NT$350'
-    } : {
-      id: 'simulation-momo-ux14',
-      title: 'BEYBLADE X 戰鬥陀螺 CX／BX／UX 系列',
-      url: 'https://www.momoshop.com.tw/TP/TP0002451/main',
-      price: 'NT$1,250'
-    };
-    const variant = mmtoy
-      ? { id: 'simulation-mmtoy-variant', name: '預購-1個(不可搭其他預購) #不補', stock: 1, available: true }
-      : { id: 'simulation-momo-variant', name: 'UX-14 天蠍長矛', stock: 18, available: true };
-    text = notificationPreview(target, product, variant, 'restock', { test: true });
-    embed = notificationEmbed(target, product, variant, 'restock', { test: true });
-    if (!mmtoy) {
-      text = `🧪 模擬｜${text.replace(/^[^ ]+\s*/, '')}`;
-      embed = {
-        ...embed,
-        title: `🧪 ${embed.title}`,
-        footer: { text: '模擬通知・不是真實補貨' }
-      };
-    }
-  }
-
-  const username = type === 'mmtoy' ? 'MM小舖獨立通知' : '陀螺通知監控儀表';
-  const messageId = await sendNotification(text, {
-    embeds: [embed],
-    channelMode: 'discord',
-    discordAudience,
-    username
-  });
-  const destination = await checkDiscordConnection(discordAudience);
-  const messageUrl = destination.guildId && destination.channelId && messageId
-    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
-    : '';
-  const labels = { mmtoy: 'M.M小舖補貨', shopping: '購物網站補貨', funbox: 'Funbox 官網上架', facebook: 'FB 販售情報' };
-  log(`${labels[type]}模擬通知已送到${requestedAudience === 'private' ? '私人管理頻道' : discordAudience === 'mmtoy' ? 'M.M小舖獨立頻道' : '公開情報頻道'}${messageId ? `｜${messageId}` : ''}`);
-  return {
-    message: `${labels[type]}模擬通知已由 Discord 接受`,
-    messageId: messageId || '',
-    messageUrl,
-    destination,
-    routedAudience: discordAudience
-  };
+async function runSimulatedRestockNotificationTest() {
+  throw new Error('發佈版本不包含演練資料');
 }
 
 function approximatePublishedTime(label, now = new Date()) {

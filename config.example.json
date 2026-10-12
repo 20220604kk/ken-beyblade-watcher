@@ -7,7 +7,11 @@
     "notifyExistingOnFirstRun": false,
     "activeHours": { "start": "09:00", "end": "22:00" }
   },
-  "funboxSandbox": { "enabled": false, "intervalSeconds": 5 },
+  "shoppingSites": {
+    "enabled": false,
+    "intervalSeconds": 60,
+    "activeHours": { "start": "09:00", "end": "22:00" }
+  },
   "notifications": { "funbox": "discord", "shopping": "discord" },
   "activeHours": { "start": "09:00", "end": "22:00" },
   "autoPurchase": {
@@ -26,7 +30,7 @@
       "action": "checkout",
       "quantity": 1,
       "payment": "virtual_atm_home",
-      "buyMode": "allow_list",
+      "buyMode": "whitelist",
       "buyKeywords": [],
       "skipBuyKeywords": [],
       "priorityKeywords": []

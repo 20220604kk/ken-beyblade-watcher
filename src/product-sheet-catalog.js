@@ -1,9 +1,10 @@
 import { createHash } from 'node:crypto';
 import { purchaseKeywordMatches } from './purchase-rules.js';
 
-export const SHEET_ID = '14DTRGTQA12FVyN4-MlV_lOqcTleqF8xL3zGcaTtO5A4';
-export const SHEET_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/edit?gid=104#gid=104`;
-export const SHEET_CSV_URL = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=104`;
+// No personal/community spreadsheet is bundled with the release.
+export const SHEET_ID = '';
+export const SHEET_URL = '';
+export const SHEET_CSV_URL = '';
 export const CATALOG_CATEGORIES = ['BX', 'UX', 'CX', '配件', '聯名', '對戰盤'];
 
 // The source is a CSV document, never executable instructions or HTML.
@@ -47,8 +48,17 @@ export function parseCatalogCsv(text) {
 export class ProductSheetCatalog {
   constructor({ fetchImpl = fetch, now = Date.now } = {}) {
     this.fetch = fetchImpl; this.now = now; this.items = []; this.updatedAt = null; this.error = ''; this.lastAttempt = null; this.pending = null;
+    const id = String(process.env.PRODUCT_CATALOG_SHEET_ID || '').trim();
+    const gid = String(process.env.PRODUCT_CATALOG_SHEET_GID || '0').trim();
+    const valid = /^[A-Za-z0-9_-]{20,100}$/.test(id) && /^\d{1,12}$/.test(gid);
+    this.sourceUrl = valid ? `https://docs.google.com/spreadsheets/d/${id}/edit?gid=${gid}` : '';
+    this.csvUrl = valid ? `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}` : '';
+    this.embedUrl = valid ? `https://docs.google.com/spreadsheets/d/${id}/htmlview?gid=${gid}&single=true&widget=true&headers=false` : '';
   }
   async read({ force = false } = {}) {
+    if (!this.csvUrl) return { sourceUrl: '', embedUrl: '', configured: false,
+      sheetName: '未設定商品試算表', categories: CATALOG_CATEGORIES,
+      items: [], updatedAt: null, stale: false, error: '請在本機 .env 設定 PRODUCT_CATALOG_SHEET_ID 與 PRODUCT_CATALOG_SHEET_GID' };
     const age = this.lastAttempt === null ? Infinity : this.now() - this.lastAttempt;
     if (this.pending) await this.pending;
     else if (age >= (force ? 30_000 : 900_000)) {
@@ -56,12 +66,13 @@ export class ProductSheetCatalog {
       this.pending = this.load().finally(() => { this.pending = null; });
       await this.pending;
     }
-    return { sourceUrl: SHEET_URL, sheetName: '終端品項及售價', categories: CATALOG_CATEGORIES,
+    return { sourceUrl: this.sourceUrl, embedUrl: this.embedUrl, configured: true,
+      sheetName: '終端品項及售價', categories: CATALOG_CATEGORIES,
       items: this.items, updatedAt: this.updatedAt, stale: Boolean(this.error), error: this.error };
   }
   async load() {
     try {
-      const response = await this.fetch(SHEET_CSV_URL, { signal: AbortSignal.timeout(10_000), headers: { Accept: 'text/csv' } });
+      const response = await this.fetch(this.csvUrl, { signal: AbortSignal.timeout(10_000), headers: { Accept: 'text/csv' } });
       if (!response.ok) throw new Error(`Google 回覆 HTTP ${response.status}`);
       if (Number(response.headers?.get('content-length')) > 1_000_000) throw new Error('試算表資料過大');
       const items = parseCatalogCsv(await response.text());

@@ -160,28 +160,6 @@ ${funboxTableCss}
       <details class="advanced-box"><summary>已掃描但排除的 APP 兌換商品</summary><p class="muted">只供稽核，證明監控有讀到；不會推播，也不會交給自動下單。</p><div id="funbox-excluded-products" class="product-list"></div></details>
     </section>
 
-    <div class="section-kicker">安全測試</div>
-    <details class="card fold test-flow">
-      <summary>模擬商品上架與推播 <span class="pill" style="color:#ffd166">測試專區</span></summary>
-      <div class="compact-copy">不會在真實官網下單；用來驗證「上架 → 掃描 → 通知 → 測試結帳」完整流程。</div>
-      <div class="row" id="funbox-sandbox-summary"></div>
-      <p id="funbox-sandbox-last" class="muted"></p>
-      <div class="row">
-        <button id="funbox-sandbox-monitor-button" onclick="toggleFunboxSandboxMonitoring()">讀取中</button>
-        <a class="button-link gold" href="/funbox-sandbox/control" target="_blank" rel="noopener noreferrer">開啟測試上架頁面</a>
-        <button class="secondary" onclick="action('/scan-funbox-sandbox')">立即掃描測試頁</button>
-        <button class="secondary" onclick="action('/test-funbox-product-notification')">測試正式商品資料推播</button>
-      </div>
-      <p id="test-flow-state" class="test-success">等待你啟動測試監控。</p>
-      <div id="funbox-sandbox-products" class="product-list" style="margin-top:16px"></div>
-      <details class="advanced-box"><summary>測試工具</summary><div class="row"><button class="secondary" onclick="resetFunboxSandboxMonitor()">重設測試基線</button><a class="page-url" href="/funbox-sandbox/collections/%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA" target="_blank" rel="noopener noreferrer">查看測試商店</a></div></details>
-    </details>
-
-    <details class="card fold notification-demo-card">
-      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
-      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・Funbox 官網</div><div class="notification-demo-body"><strong>🚨 Funbox 戰鬥陀螺上新！</strong><br>品名：BEYBLADE X UX-15 起始組<br>價格：NT$699<br>目前庫存：100 組<br>狀態：新品上架<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div>
-      <p class="notification-demo-note">庫存下降時會改成庫存提醒，並顯示目前可售數量與即將售罄提示。</p>
-    </details>
 
     <details class="card fold">
       <summary>Funbox 官網執行紀錄</summary><p class="muted">只顯示 Funbox 掃描、通知與錯誤。</p><pre id="funbox-logs">讀取中…</pre>
@@ -320,12 +298,6 @@ ${funboxTableCss}
     </details>
     <details class="card fold"><summary><span>私人下單紀錄</span><span id="auto-purchase-summary" class="pill">已關閉</span></summary><p class="compact-copy">購物失敗只會記錄在這裡與私人 Discord；不會中斷監控，也不會出現在公開頻道。</p><div id="auto-purchase-recent" class="muted purchase-console purchase-log-list">尚無紀錄。</div></details>
 
-    <details class="card fold notification-demo-card">
-      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
-      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・購物網站</div><div class="notification-demo-body"><strong>🔔 規格補貨｜UX-14 天蠍長矛</strong><br>購物網站：momo購物網<br>監控專區：墊腳石 TAKARA TOMY 專區<br>商品：BEYBLADE X 戰鬥陀螺 CX／BX／UX 系列<br>補貨款式：UX-14 天蠍長矛<br>前台可售：18 組<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div>
-      <div class="notification-demo" style="margin-top:14px"><div class="notification-demo-head">陀螺通知監控儀表・開賣倒數</div><div class="notification-demo-body"><strong>⏰ 距離開賣 60 分鐘｜momo Funbox BX-35</strong><br>購物網站：momo購物網<br>商品：momo Funbox BX-35<br>開賣時間：7/25 11:00<br>現在時間：10:00<br>剩餘時間：60 分鐘<br>商品頁：<span class="notification-demo-link">立即前往</span><br>--------------------------------------------------</div></div>
-      <p class="notification-demo-note">自訂暱稱會顯示在「監控專區」；購物網站名稱仍會另外保留，方便判斷來源。</p>
-    </details>
 
     <details class="card fold">
       <summary>購物網站執行紀錄（依網站分類）</summary><pre id="shopping-logs">讀取中…</pre>
@@ -359,27 +331,6 @@ ${funboxTableCss}
       </form>
       <p id="amazon-jp-summary" class="muted">讀取中…</p>
       <p id="amazon-jp-error" class="bad"></p>
-      <details class="advanced-box"><summary>突襲練習 · 日亞測試推播</summary>
-      <form class="amazon-jp-test-panel" onsubmit="testAmazonJpNotification(event)">
-        <strong>測試官方原價通知</strong>
-        <span class="muted">選擇品項後推送到日本拍賣 Discord，點通知會開啟真實 Amazon.co.jp 商品頁；這只是通知格式測試，不會查價或下單。</span>
-        <div class="amazon-jp-test-options" role="radiogroup" aria-label="測試品項">
-          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="B0HJ783F18" checked onchange="toggleAmazonJpTestFields()"><span>BX-52<small>ラスタードラグーン6-60LC｜¥2,300</small></span></label>
-          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="B0HJ75X3PN" onchange="toggleAmazonJpTestFields()"><span>BX-53<small>オールインワンセット｜¥7,480</small></span></label>
-          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="custom" onchange="toggleAmazonJpTestFields()"><span>自訂日亞網址<small>填入你想測試的商品</small></span></label>
-        </div>
-        <div id="amazon-jp-test-custom" class="amazon-jp-test-custom" hidden>
-          <label class="wide">Amazon.co.jp 商品網址<input id="amazon-jp-test-url" type="url" placeholder="https://www.amazon.co.jp/dp/ASIN" autocomplete="off"></label>
-          <label class="wide">商品名稱<input id="amazon-jp-test-title" type="text" maxlength="180" placeholder="填入測試通知要顯示的名稱"></label>
-          <label>型號<input id="amazon-jp-test-code" type="text" maxlength="12" placeholder="例如 BX-52"></label>
-          <label>測試使用定價（JPY）<input id="amazon-jp-test-msrp" type="number" min="1" max="1000000" step="1" placeholder="例如 2300"></label>
-          <label>模擬日亞價格（JPY，可留空）<input id="amazon-jp-test-price" type="number" min="1" max="1000000" step="1" placeholder="留空＝測試使用定價"></label>
-          <p class="muted wide" style="margin:0">自訂商品若已在日亞資料庫，名稱、型號與定價可留空；未收錄者請自行填入。</p>
-        </div>
-        <button type="submit" class="secondary">推送所選測試通知</button>
-        <p id="amazon-jp-test-result" class="notice muted" role="status" aria-live="polite"></p>
-      </form>
-      </details>
       <details class="advanced-box"><summary>單品資料庫 · 新增與刪除</summary>
       <p class="compact-copy">貼入日亞商品網址，加入資料庫與直接追蹤。</p>
       <form class="field" onsubmit="addAmazonJpProduct(event)">
@@ -404,7 +355,7 @@ ${funboxTableCss}
 
     <details class="card fold"><summary>掃描時間、速度與黑名單</summary><form onsubmit="saveJapanSettings(event)"><div class="field"><span>監控時段</span><input id="japan-active-start" type="time" required><span>到</span><input id="japan-active-end" type="time" required></div><div class="field" style="margin-top:12px"><label>平時每 <input id="japan-interval" type="number" min="20" max="3600" step="1" required> 秒檢查一次</label><button type="submit">儲存設定</button></div><label class="funbox-rule-box black" style="margin-top:14px"><strong>⛔ 日本購物共用黑名單</strong><small>適用於 1999、日本樂天市場／Books、EDION 與 Amazon.co.jp。商品名稱命中任一行時仍保留掃描紀錄，但不推播。每行一個關鍵字。</small><textarea id="japan-exclude-keywords" oninput="japanDirty=true" placeholder="例如：&#10;ギアケース&#10;Gear Case&#10;デッキケース"></textarea></label></form><p class="compact-copy">開始與結束相同代表 24 小時。一般日本網站維持固定週期，不會因單次變化連續追索；同型號 24 小時內跨網站只推播一次。Amazon.co.jp 使用獨立排程，不受此規則影響。所有一般日本網站另有 BEYBLADE X 世代硬性篩選，舊世代不會進入通知基線。</p></details>
 
-    <details class="card fold notification-demo-card"><summary>通知測試與示範 <span class="demo-badge">測試工具</span></summary><div class="section-tools"><p class="compact-copy">需要時才使用，不影響正式掃描。</p><button class="secondary small" onclick="testJapanNotification()">測試 1999 UX-15 通知</button></div><div class="notification-demo"><div class="notification-demo-head">日拍追蹤</div><div class="notification-demo-body"><strong>🇯🇵 1999.co.jp｜新商品可購買</strong><br>商品：BEYBLADE X UX-15<br>價格：¥4,200（約 NT$920）<br>狀態：新商品可購買<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div><p class="notification-demo-note">台幣採固定估算 ¥1 ≈ NT$0.22，四捨五入至十元；僅供快速判讀，不影響價格與庫存判斷。</p></details>
+
     <details class="card fold"><summary>日本拍賣執行紀錄</summary><pre id="japan-logs">讀取中…</pre></details>
   </main>
 
@@ -461,7 +412,7 @@ ${funboxTableCss}
             <select id="funbox-notification-mode" onchange="notificationDirty=true">
               <option value="discord">只傳 Discord</option><option value="line">只傳 LINE</option><option value="both">Discord + LINE 都傳</option><option value="auto">自動選擇可用平台</option>
             </select>
-            <small>新品、庫存變化與沙盒測試送到公開情報頻道。</small>
+            <small>新品與庫存變化送到公開情報頻道。</small>
           </label>
           <label class="channel-choice"><strong>🏬 公開｜購物網站</strong>
             <select id="shopping-notification-mode" onchange="notificationDirty=true">
@@ -505,12 +456,6 @@ ${funboxTableCss}
       <div id="self-check-body" hidden><div id="self-check-list"></div></div>
     </section>
 
-    <details class="card fold notification-demo-card">
-      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
-      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・系統狀態</div><div class="notification-demo-body"><strong>🟢 今日監控開始</strong><br>Funbox 官網：09:00～19:00<br>購物網站：09:00～22:00<br>通知服務：Discord + LINE<br>--------------------------------------------------</div></div>
-      <p class="notification-demo-note">此區只示範排版；不提供修改，真正設定仍由上方通知分流控制。</p>
-    </details>
-
     <details class="card fold">
       <summary>玩家備忘錄 <span class="muted">只存在這台電腦</span></summary>
       <p class="compact-copy">記下開賣時間、店家或抽選結果，不會傳到 Discord 或 LINE。</p>
@@ -520,59 +465,6 @@ ${funboxTableCss}
       </form>
     </details>
 
-    <section class="card simulation-lab">
-      <div class="card-heading"><div><h2>🧪 真實樣式推播測試</h2><p class="compact-copy">模擬補貨訊息，確認手機摘要、商品名稱、排版與頻道分流。</p></div><span class="pill">訊息會標示為測試</span></div>
-      <div class="simulation-controls">
-        <label>模擬通知種類
-          <select id="simulation-notification-type" onchange="toggleFunboxSimulationFields()">
-            <option value="funbox">Funbox 官網上架</option>
-            <option value="mmtoy">M.M小舖規格補貨</option>
-            <option value="shopping">一般購物網站補貨</option>
-            <option value="shopee">蝦皮 FUNBOX 旗艦館補貨（UX-21）</option>
-          </select>
-        </label>
-        <label>推送位置
-          <select id="simulation-notification-audience">
-            <option value="private">私人管理頻道（建議先測）</option>
-            <option value="public">公開頻道（M.M 會自動送到獨立頻道）</option>
-          </select>
-        </label>
-        <button id="simulation-notification-button" type="button" onclick="testSimulatedNotification()">傳送模擬補貨</button>
-      </div>
-      <details id="simulation-funbox-custom" class="simulation-custom" open>
-        <summary>Funbox 朋友互動內容</summary>
-        <div class="simulation-custom-grid">
-          <label class="wide">通知顯示品名
-            <input id="simulation-funbox-title" maxlength="120" value="BEYBLADE X 戰鬥陀螺 UX-16 時鐘幻象">
-          </label>
-          <label>顯示價格
-            <input id="simulation-funbox-price" maxlength="32" value="NT$350">
-          </label>
-          <label>顯示庫存
-            <input id="simulation-funbox-stock" type="number" min="0" max="99999" value="50">
-          </label>
-          <label class="wide">點擊後前往網址
-            <input id="simulation-funbox-target-url" type="url" value="https://www.youtube.com/watch?v=dMTy6C4UiQ4" placeholder="YouTube、圖片頁或其他 http/https 網址">
-          </label>
-          <label class="wide">通知圖片網址（選填）
-            <input id="simulation-funbox-image-url" type="url" placeholder="https://...jpg、png、gif 或 Discord 圖片網址">
-          </label>
-        </div>
-        <p class="simulation-custom-note">商品標題與「立即前往商品頁」都會開啟你填的網址；圖片只改通知縮圖。通知仍固定標示 🧪 測試，不會加入基線或啟動下單。</p>
-      </details>
-      <p class="simulation-warning">公開測試會真的出現在玩家可見頻道；M.M 小舖會送往「mm小舖獨立通知」，其他類型送往一般公開情報。</p>
-      <div class="notification-test">
-        <div class="notification-test-actions">
-          <div id="simulation-notification-progress" class="notification-progress" role="progressbar" aria-label="模擬推播進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="simulation-notification-progress-bar" class="notification-progress-bar"></div></div>
-          <span id="simulation-notification-progress-text" class="muted">等待測試</span>
-        </div>
-        <div class="notification-test-status">
-          <strong id="simulation-notification-state">尚未傳送模擬通知。</strong>
-          <div id="simulation-notification-detail" class="notification-test-detail">送出成功後會顯示 Discord 實際頻道與訊息編號。</div>
-          <a id="simulation-notification-link" class="notification-test-link" target="_blank" rel="noopener noreferrer" hidden>直接開啟 Discord 訊息 ↗</a>
-        </div>
-      </div>
-    </section>
   </main>
 
 <script>
@@ -1051,7 +943,6 @@ function renderAutoPurchase(s){
   }).join('')+'</tbody></table></div>':'尚無紀錄。';
 }
 function renderSharedStatus(s){const n=s.notifications||{},f=s.funbox||{},shop=s.shoppingSites||{};document.querySelector('#shared-funbox-status').textContent=(!f.enabled?'目前停止':!f.withinActiveHours?'等待掃描時段':f.boostActive?'新品高速追蹤中':'監控中')+'｜'+(f.activeHours?f.activeHours.start+'～'+f.activeHours.end:'未設定時段')+'｜目前每 '+(f.effectiveIntervalSeconds||f.intervalSeconds||30)+' 秒｜正式基線 '+(f.seenCount||0)+'｜APP排除 '+(f.excludedCount||0)+'｜門檻提醒'+(f.stockChangeNotificationsEnabled?'開啟':'關閉');const activeShopping=(shop.targets||[]).filter(target=>target.enabled!==false);const pausedShopping=(shop.targets||[]).filter(target=>target.enabled===false);const onlineShopping=activeShopping.filter(target=>target.withinActiveHours);const customShopping=activeShopping.filter(target=>target.scheduleGroup==='custom').length;const reminderCount=(shop.saleReminders||[]).filter(reminder=>reminder.enabled!==false&&Date.parse(reminder.saleStartAt)>Date.now()).length;document.querySelector('#shared-shopping-status').textContent=!shop.enabled?'監控已停止':shop.scanning?'正在掃描':shop.boostActive?'變化熱點追蹤中':'監控正常運作';document.querySelector('#shared-shopping-schedule-status').textContent='專區：'+activeShopping.length+' 個監控｜'+pausedShopping.length+' 個暫停｜現在運作 '+onlineShopping.length+' 個';document.querySelector('#shared-shopping-speed-status').textContent='排程：共用 '+(shop.activeHours?shop.activeHours.start+'～'+shop.activeHours.end:'未設定')+'｜自訂時段 '+customShopping+' 個｜平時 '+(shop.intervalSeconds||60)+' 秒／變化 3 秒';document.querySelector('#shared-shopping-reminder-status').textContent='提醒：庫存'+(shop.stockChangeNotificationsEnabled?'開啟':'關閉')+'｜開賣倒數 '+reminderCount+' 個｜Discord '+(n.shoppingReady?'正常':'未設定');document.querySelector('#shared-notification-status').textContent='Funbox：'+(n.funboxLabel||'未設定')+'｜購物網站：'+(n.shoppingLabel||'未設定');}
-function renderFunboxSandbox(s){const f=s.funboxSandbox||{};const activity=!f.enabled?'測試監控未開啟':f.scanning?'正在掃描':'測試監控已開啟';document.querySelector('#funbox-sandbox-summary').innerHTML='<span class="pill '+(f.enabled?'ok':'bad')+'">'+activity+'</span><span class="pill">每 '+(f.intervalSeconds||5)+' 秒</span><span class="pill">已上架 '+(f.publishedCount||0)+' 件</span><span class="pill">已通知 '+(f.seenCount||0)+' 件</span>';const x=f.lastScan;document.querySelector('#funbox-sandbox-last').textContent=(x?'上次掃描：'+fmt(x.completedAt)+'｜找到 '+x.checked+' 件｜新商品 '+(x.discovered||0)+' 件｜送出通知 '+(x.notified||0)+' 則':'尚未執行測試掃描。')+(f.nextScanAt?'｜下次：'+fmt(f.nextScanAt):'');const button=document.querySelector('#funbox-sandbox-monitor-button');button.textContent=f.enabled?'停止測試監控':'啟動測試監控';button.className=f.enabled?'danger':'good';const flow=document.querySelector('#test-flow-state');if(f.publishedCount>0&&f.seenCount>=f.publishedCount){flow.textContent='✓ 掃描成功，Discord 通知已送出。';flow.className='test-success ok';}else if(f.enabled&&f.publishedCount>0){flow.textContent='已發現上架商品，正在送出 Discord 通知…';flow.className='test-success';}else if(f.enabled){flow.textContent='測試監控已開啟。現在請打開上架頁面並模擬上架。';flow.className='test-success ok';}else{flow.textContent='等待你啟動測試監控。';flow.className='test-success';}const products=f.products||[];document.querySelector('#funbox-sandbox-products').innerHTML=products.map(product=>'<div class="product-row"><div><strong>'+esc(product.title)+'</strong><div class="product-meta">'+esc(product.sku)+'｜NT$'+Number(product.price||0).toLocaleString('zh-TW')+'｜庫存 '+product.stock+'</div></div><span class="pill '+(product.published?'ok':'')+'">'+(product.published?'已模擬上架':'未上架')+'</span></div>').join('');}
 function renderChannelLogs(s){if(!s)return;renderRegularState(s);if(!memoDirty)document.querySelector('#memo').value=s.note||'';document.querySelector('#regular-logs').textContent=(s.regularLogs||[]).join('\\n')||'尚無常態模式紀錄';document.querySelector('#hotspot-logs').textContent=(s.hotspotLogs||[]).join('\\n')||'尚無熱點加速紀錄';document.querySelector('#funbox-logs').textContent=(s.funboxLogs||[]).join('\\n')||'尚無官網監控紀錄';const grouped=s.shoppingSiteLogs||{};const preferred=['FUNBOX官網','蝦皮-FUNBOX','誠品線上','momo購物網','墊腳石','童無忌','森森文具','MM小舖-已停用','其他購物網站'];const keys=Object.keys(grouped).sort((a,b)=>{const ai=preferred.indexOf(a),bi=preferred.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)||a.localeCompare(b,'zh-TW');});document.querySelector('#shopping-logs').textContent=keys.length?keys.map(key=>'【'+key+'】\\n'+(grouped[key]||[]).join('\\n')).join('\\n\\n'):((s.shoppingLogs||[]).join('\\n')||'尚無購物網站監控紀錄');}
 function renderJapan(s){const j=s.japanAuctions||{};if(!japanDirty){document.querySelector('#japan-active-start').value=j.activeHours&&j.activeHours.start||'00:00';document.querySelector('#japan-active-end').value=j.activeHours&&j.activeHours.end||'00:00';document.querySelector('#japan-interval').value=j.intervalSeconds||30;const blacklist=document.querySelector('#japan-exclude-keywords');if(document.activeElement!==blacklist)blacklist.value=(j.excludeKeywords||[]).join('\\n');}const targets=j.targets||[];const active=targets.filter(t=>t.enabled!==false);const state=document.querySelector('#japan-state');state.textContent=!j.enabled?'目前停止':!j.withinActiveHours?'等待掃描時段':j.scanning?'正在讀取日本網站':'監控已排程';state.className='pill '+(j.enabled&&j.withinActiveHours?'ok':'');document.querySelector('#japan-summary').innerHTML='<span class="pill '+(j.enabled?'ok':'bad')+'">'+active.length+' 個網站運作</span><span class="pill">平時 '+(j.intervalSeconds||30)+' 秒</span><span class="pill">黑名單 '+(j.excludeKeywords||[]).length+' 個</span><span class="pill '+(j.notificationReady?'ok':'bad')+'">日拍 Discord '+(j.notificationReady?'已連接':'未設定')+'</span>';const x=j.lastScan;const targetName=x&&(x.siteName||targets.find(target=>target.id===x.targetId)?.siteName);document.querySelector('#japan-last').textContent=x?'最近完成：'+(targetName||'日本網站')+'｜'+fmt(x.completedAt)+'｜'+(x.checkedProducts||0)+' 件｜排除 '+(x.excluded||0)+'｜新品 '+(x.discovered||0)+'｜補貨 '+(x.restocked||0)+'｜通知 '+(x.notified||0):'尚未完成日本網站掃描。';document.querySelector('#japan-error').textContent=(x&&x.errors||[]).join('｜');const button=document.querySelector('#japan-monitor-button');button.textContent=j.enabled?'停止日本拍賣監控':'啟動日本拍賣監控';button.className=j.enabled?'danger':'good';document.querySelector('#japan-target-list').innerHTML=targets.map((target,index)=>{const baseline=target.baselineProductCount??target.productCount??0;const cadence=target.scanning?'掃描中':target.backoffUntil?'讀取失敗，降速至 '+fmt(target.backoffUntil):target.boostActive?'熱點 '+target.effectiveIntervalSeconds+' 秒':'常態 '+target.effectiveIntervalSeconds+' 秒';return '<section class="japan-target-card '+(target.enabled===false?'paused':'')+'"><div class="shopping-site-name">'+esc(target.siteName)+'</div><h3>'+esc(target.name)+'</h3><a class="page-url" href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">'+esc(target.url)+'</a><div class="shopping-target-facts"><span class="shopping-target-fact">'+cadence+'</span><span class="shopping-target-fact">'+(target.initialized?baseline+' 件保留基線｜本輪讀取 '+(target.lastRawProductCount||0)+' 件｜排除 '+(target.excludedCount||0):'等待建立基線')+'</span><span class="shopping-target-fact">解析器：'+esc(target.sourceType)+'</span>'+(target.failureCount?'<span class="shopping-target-fact bad">連續失敗 '+target.failureCount+' 次</span>':'')+'</div>'+(target.lastError?'<p class="bad">最近錯誤：'+esc(target.lastError)+'</p>':'')+'<div class="japan-target-actions"><button class="'+(target.enabled===false?'good':'secondary')+' small" onclick="setJapanTargetEnabled('+index+','+(target.enabled===false)+')">'+(target.enabled===false?'恢復監控':'暫停監控')+'</button><button class="danger small" onclick="deleteJapanTarget('+index+')">刪除</button><a class="shopping-target-link" href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">開啟網站 ↗</a></div></section>'}).join('');const shared=document.querySelector('#shared-japan-status');if(shared)shared.textContent=!j.enabled?'監控已停止':j.scanning?'正在掃描':active.length+' 個網站獨立運作｜平時 '+(j.intervalSeconds||30)+' 秒｜Discord '+(j.notificationReady?'正常':'未設定');}
 function renderAmazonJp(s){const a=s.japanAuctions&&s.japanAuctions.amazonJp||{};if(!amazonJpDirty){document.querySelector('#amazon-jp-enabled').checked=a.enabled!==false;document.querySelector('#amazon-jp-postal-code').value=a.postalCode||'100-0001';}const state=document.querySelector('#amazon-jp-state');state.textContent=a.enabled===false?'目前停止':a.scanning?'核對官方賣家與價格':a.cadenceMode==='recovery'?'阻擋後線性降速中':'線性浮動監控中';state.className='pill '+(a.enabled!==false&&!a.lastError?'ok':a.lastError?'bad':'');const parts=['目前 '+(a.effectiveIntervalSeconds||20)+' 秒','平時 15～20 秒／阻擋 40～60 秒','定價庫 '+(a.catalogCount||0)+' 件','定價前專線 '+(a.lastDedicatedCheckedCount||0)+' 件','品牌 ASIN '+(a.brandAsinCount||0)+' 件','手動資料庫 '+(a.manualProductCount||0)+' 件'];if(a.lastKnownCount!==undefined)parts.push('已知商品 '+(a.lastKnownCount||0)+' 件');if(a.lastDirectCheckedCount!==undefined)parts.push('本輪直查 '+(a.lastDirectCheckedCount||0)+' 件');if(a.lastExcludedCount!==undefined)parts.push('黑名單排除 '+(a.lastExcludedCount||0)+' 件');if(a.lastEligibleCount!==undefined)parts.push('目前合格 '+(a.lastEligibleCount||0)+' 件');if(a.lastScanAt)parts.push('最近 '+fmt(a.lastScanAt));if(a.failureCount)parts.push('連續失敗 '+a.failureCount+' 次');if(a.backoffUntil)parts.push('降速至 '+fmt(a.backoffUntil));else if(a.nextScanAt)parts.push('下次 '+fmt(a.nextScanAt));document.querySelector('#amazon-jp-summary').textContent=parts.join('｜');document.querySelector('#amazon-jp-error').textContent=a.lastError||'';document.querySelector('#amazon-jp-signals').innerHTML=(a.manualProducts||[]).map(item=>'<div class="product-row"><div class="product-main">'+(item.imageUrl?'<img class="product-thumb" src="'+esc(item.imageUrl)+'" alt="">':'')+'<div><a href="'+esc(item.productUrl||item.originalAmazonUrl)+'" target="_blank" rel="noopener noreferrer"><strong>'+(item.code?esc(item.code)+'｜':'')+esc(item.title||('ASIN '+item.asin))+'</strong></a><div class="product-meta">ASIN '+esc(item.asin)+'｜'+(item.catalogConfirmed?'官方定價庫已收錄'+(item.msrpYen?' ¥'+Number(item.msrpYen).toLocaleString('ja-JP'):''):'等待官方定價庫')+'</div><div class="product-meta">'+(item.source==='x_signal'?'來源 X 速報｜':'手動新增｜')+'已存入日亞單品資料庫｜仍需 Amazon.co.jp 賣家驗證</div></div></div><div class="japan-target-actions"><span class="pill">'+fmt(item.addedAt||item.updatedAt)+'</span><button class="danger small" data-asin="'+esc(item.asin)+'" onclick="deleteAmazonJpProduct(this.dataset.asin)">刪除</button></div></div>').join('');}
@@ -1245,7 +1136,7 @@ async function pairEdionBrowser(){
 function renderActiveStatus(s){
   if(activeTab==='overview')renderOverview(s);
   else if(activeTab==='fb')renderFacebookStatus(s);
-  else if(activeTab==='funbox'){renderFunbox(s);renderFunboxSandbox(s);renderAutoPurchase(s);}
+  else if(activeTab==='funbox'){renderFunbox(s);renderAutoPurchase(s);}
   else if(activeTab==='shopping'){renderShopping(s);renderAutoPurchase(s);}
   else if(activeTab==='japan'){renderJapan(s);renderJapanHealth(s);renderEdionBrowser(s);renderAmazonJp(s);renderAmazonProductOrder(s);}
   else if(activeTab==='shared'){renderNotifications(s);renderSharedStatus(s);renderAutoPurchase(s);renderSelfCheck(s.lastSelfCheck);if(!memoDirty)document.querySelector('#memo').value=s.note||'';document.querySelector('#shared-japan-status').textContent=s.japanAuctions?.enabled?'監控已啟用':'已暫停';}
@@ -1334,8 +1225,6 @@ async function scanAmazonProductOrder(slot){await run('正在只讀檢查日亞�
 async function resetAmazonProductOrderProgress(slot){const result=document.querySelector('#amazon-product-order-'+slot+'-result');result.textContent='正在重設任務 '+slot+' 進度…';try{const saved=await api('/japan/amazon-product-order/settings',{slot,enabled:document.querySelector('#amazon-product-order-'+slot+'-enabled').checked,mode:document.querySelector('#amazon-product-order-'+slot+'-mode').value,targetSuccessCount:Number(document.querySelector('#amazon-product-order-'+slot+'-target-count').value),targetUrl:document.querySelector('#amazon-product-order-'+slot+'-url').value,resetProgress:true});amazonProductOrderDirty[slot]=false;result.textContent=saved.message;await refresh();}catch(error){result.textContent=error.message;}}
 async function addAmazonJpProduct(event){event.preventDefault();const input=document.querySelector('#amazon-jp-product-url');const button=document.querySelector('#amazon-jp-product-add');button.disabled=true;try{const saved=await run('正在加入日亞單品資料庫…',()=>api('/japan/amazon/products',{url:input.value}));if(saved)input.value='';}finally{button.disabled=false;}}
 async function deleteAmazonJpProduct(asin){if(!confirm('確定從日亞單品資料庫刪除 ASIN '+asin+'？刪除後會停止此商品的專屬直接監控。'))return;await run('正在刪除日亞單品…',()=>api('/japan/amazon/products/delete',{asin}));}
-async function toggleFunboxSandboxMonitoring(){const enabled=currentStatus&&currentStatus.funboxSandbox&&currentStatus.funboxSandbox.enabled;await run('更新沙盒監控狀態…',()=>api(enabled?'/funbox-sandbox/stop':'/funbox-sandbox/start'));}
-async function resetFunboxSandboxMonitor(){if(!confirm('確定清除沙盒監控的商品基線嗎？這不會影響正式官網或 FB 紀錄。'))return;await run('重設沙盒基線…',()=>api('/funbox-sandbox/reset-monitor'));}
 async function saveNotificationSettings(event){event.preventDefault();const state=document.querySelector('#notification-state');state.textContent='儲存中…';try{const saved=await api('/notifications',{funbox:document.querySelector('#funbox-notification-mode').value,shopping:document.querySelector('#shopping-notification-mode').value});notificationDirty=false;state.textContent=saved.message;await refresh();}catch(error){state.textContent=error.message;}}
 function parseFunboxPurchaseKeywords(value){return [...new Set(String(value||'').split(/\\r?\\n|,|，|、/).map(item=>item.trim()).filter(Boolean))];}
 function funboxAccountPaymentsPayload(){return Object.fromEntries(currentFunboxSlots().map(slot=>{const selected=document.querySelector('input[name="funbox-account-'+slot+'-payment"]:checked');return[slot,selected?selected.value:'virtual_atm_home'];}));}
@@ -1479,6 +1368,7 @@ export function createDashboard({
   const server = http.createServer(async (request, response) => {
     try {
       if (isArchivedFacebookRequest(request.url)) return json(response, 410, { error: 'Facebook 已封存：1010FB暫存', code: 'facebook_archived' });
+      if (/^\/(?:funbox-sandbox|scan-funbox-sandbox|test-(?!notification(?:$|\?)))/.test(request.url)) return json(response, 410, { error: '發佈版本不提供演練及示範推播入口' });
       if (readOnly && request.method !== 'GET') return json(response, 403, { error: '預覽模式不會更改監控或推送通知' });
       if (request.method === 'GET' && (request.url === '/api/product-catalog' || request.url === '/api/product-catalog?refresh=1')) {
         const catalog = await productCatalog.read({ force: request.url.endsWith('?refresh=1') });

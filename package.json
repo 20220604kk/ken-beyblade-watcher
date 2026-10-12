@@ -6,9 +6,7 @@
   "type": "module",
   "scripts": {
     "start": "node src/index.js",
-    "check": "node --check src/index.js && node --check src/scheduling.js && node --check src/amazon-jp-single-order.js && node --check src/amazon-order-history.js && node --check src/facebook-retired.js && node --check src/funbox.js && node --check src/funbox-sandbox.js && node --check src/shopping-sites.js && node --check src/taiwan-msrp.js && node --check src/japan-auctions.js && node --check src/amazon-jp-monitor.js && node --check src/sale-reminders.js && node --check src/discord.js && node --check src/discord-automation.js && node --check src/dashboard.js && node --check src/settings.js && node --check src/state.js && node --check src/duty-notifications.js && node --check src/auto-purchase.js && node --check src/credential-store.js && node --check src/shopee-bridge.js && node --check src/shopee-observations.js && node --check extensions/shopee-monitor/background.js && node --check extensions/shopee-monitor/collector.js && node -e \"import('./src/dashboard.js')\"",
-    "test": "node --test",
-    "test:commerce": "node scripts/commerce-acceptance.mjs",
+    "check": "node scripts/check.mjs",
     "check:edion": "node --check src/edion-browser-bridge.js && node --check extensions/edion-monitor/background.js && node --check extensions/edion-monitor/collector.js && node --check extensions/edion-monitor/runner.js && node --check extensions/edion-monitor/popup.js"
   },
   "dependencies": {
@@ -18,6 +16,6 @@
     "playwright": "^1.55.0"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=20.18.1"
   }
 }

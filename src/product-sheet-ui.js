@@ -1,5 +1,3 @@
-import { SHEET_URL } from './product-sheet-catalog.js';
-
 export const catalogHtml = `
     <section id="product-catalog-card" class="card">
       <div class="card-heading"><h2>商品黑白名單 · 終端售價</h2><button type="button" onclick="loadProductCatalog(true)">更新原表</button></div>
@@ -7,7 +5,7 @@ export const catalogHtml = `
         <label>名單平台 <select id="catalog-platform" onchange="renderProductCatalog()"><option value="funbox">FUNBOX</option><option value="eslite">購物網站</option></select></label>
         <label>分類 <select id="catalog-category" onchange="renderProductCatalog()"><option value="">全部</option>${['BX','UX','CX','配件','聯名','對戰盤'].map(x => `<option>${x}</option>`).join('')}</select></label>
         <label>搜尋 <input id="catalog-search" placeholder="型號／品項" oninput="renderProductCatalog()"></label>
-        <a href="${SHEET_URL}" target="_blank" rel="noopener noreferrer">開啟原表 ↗</a>
+        <a id="catalog-source-link" hidden target="_blank" rel="noopener noreferrer">開啟原表 ↗</a>
       </div>
       <p id="catalog-status" class="compact-copy" role="status">讀取終端售價中…</p>
       <p id="catalog-action-status" class="notice" role="status"></p>
@@ -33,12 +31,15 @@ async function loadProductCatalog(force=false){
 }
 function renderProductCatalog(){
   if(!productCatalog)return;
+  const sourceLink=document.getElementById('catalog-source-link');
+  sourceLink.hidden=!productCatalog.sourceUrl;if(productCatalog.sourceUrl)sourceLink.href=productCatalog.sourceUrl;
+  document.getElementById('catalog-sheet-preview').hidden=!productCatalog.embedUrl;
   const platform=document.getElementById('catalog-platform').value,category=document.getElementById('catalog-category').value;
   const search=document.getElementById('catalog-search').value.trim().toUpperCase();
   const items=productCatalog.items.filter(x=>(!category||x.category===category)&&(!search||(x.model+' '+x.name).toUpperCase().includes(search)));
   const settings=productCatalog.lists?.[platform]||{};
   const note=platform==='eslite'&&settings.mode!=='whitelist'?'｜目前黑名單以外皆可買；白名單不限制範圍。':'';
-  document.getElementById('catalog-status').textContent=items.length+' / '+productCatalog.items.length+' 品項｜'+productCatalog.sheetName+'｜'+(productCatalog.updatedAt?'更新 '+new Date(productCatalog.updatedAt).toLocaleString('zh-TW'):'尚未讀取')+note+(productCatalog.error?'｜'+productCatalog.error+'（舊資料）':'');
+  document.getElementById('catalog-status').textContent=items.length+' / '+productCatalog.items.length+' 品項｜'+productCatalog.sheetName+'｜'+(productCatalog.updatedAt?'更新 '+new Date(productCatalog.updatedAt).toLocaleString('zh-TW'):'尚未讀取')+note+(productCatalog.error?'｜'+productCatalog.error+(productCatalog.items.length?'（舊資料）':''):'');
   document.getElementById('catalog-rows').innerHTML=items.length?items.map(x=>{
     const s=x.listStates?.[platform]||{},black=s.black||[],white=s.white||[];
     const label=black.length?'黑名單：'+black.join('、'):white.length?'白名單：'+white.join('、'):'未加入';
@@ -56,8 +57,8 @@ async function addCatalogList(id,list){
 }
 document.getElementById('catalog-rows').addEventListener('click',event=>{const button=event.target.closest('button[data-catalog-id]');if(button)void addCatalogList(button.dataset.catalogId,button.dataset.list);});
 document.getElementById('catalog-sheet-preview').addEventListener('toggle',event=>{
-  if(event.target.open&&!document.querySelector('#catalog-embed iframe')){
-    const frame=document.createElement('iframe');frame.title='終端品項及售價原表';frame.loading='lazy';frame.referrerPolicy='no-referrer';frame.src='${SHEET_URL.replace('/edit?gid=104#gid=104', '/htmlview?gid=104&single=true&widget=true&headers=false')}';document.getElementById('catalog-embed').append(frame);
+  if(event.target.open&&productCatalog?.embedUrl&&!document.querySelector('#catalog-embed iframe')){
+    const frame=document.createElement('iframe');frame.title='終端品項及售價原表';frame.loading='lazy';frame.referrerPolicy='no-referrer';frame.src=productCatalog.embedUrl;document.getElementById('catalog-embed').append(frame);
   }
 });
 `;
