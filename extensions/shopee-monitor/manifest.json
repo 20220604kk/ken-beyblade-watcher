@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "陀螺監控・蝦皮本機連接器",
+  "version": "1.1.1",
+  "minimum_chrome_version": "120",
+  "description": "以低頻賣場探索與唯讀商品狀態查詢傳回本機監控儀表。不匯出 Cookie、不碰購物車、不下單。",
+  "permissions": ["storage", "alarms", "scripting"],
+  "host_permissions": ["https://shopee.tw/*", "http://127.0.0.1:3210/*"],
+  "background": {"service_worker": "background.js", "type": "module"},
+  "action": {"default_title": "蝦皮本機連接器", "default_popup": "popup.html"}
+}

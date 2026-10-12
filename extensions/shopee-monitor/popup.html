@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>蝦皮本機連接器</title>
+<style>body{width:340px;padding:18px;background:#151925;color:#edf1fa;font:15px/1.6 system-ui}h1{font-size:19px}input,button{box-sizing:border-box;width:100%;padding:10px;margin:7px 0;border-radius:7px}button{background:#f48049;border:0;font-weight:bold}p{overflow-wrap:anywhere}small{color:#b5c0d2}</style>
+<h1>蝦皮本機連接器</h1><p>連接後會為儀表中啟用的蝦皮網址建立、刷新背景分頁。請先在這個 Chrome 登入蝦皮。</p>
+<label>儀表產生的配對碼<input id="token" type="password" autocomplete="off" maxlength="512" spellcheck="false" autocapitalize="off"></label>
+<p id="token-count" role="status">已貼上 0 / 64 字元（請使用儀表的複製按鈕）</p>
+<button id="connect">同意連接並啟動指定分頁</button><button id="stop">停止連接</button>
+<p id="status" role="status"></p><small>只傳商品與登入指示到 127.0.0.1:3210；不讀密碼、不讀 Cookie、不下單。遇驗證請手動處理，然後在儀表按「重新檢查」。Chrome 休眠會延遲。</small><script type="module" src="popup.js"></script></html>

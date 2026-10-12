@@ -1,0 +1,39 @@
+{
+  "dashboardPort": 3210,
+  "monitoringEnabled": false,
+  "funbox": {
+    "enabled": false,
+    "intervalSeconds": 30,
+    "notifyExistingOnFirstRun": false,
+    "activeHours": { "start": "09:00", "end": "22:00" }
+  },
+  "funboxSandbox": { "enabled": false, "intervalSeconds": 5 },
+  "notifications": { "funbox": "discord", "shopping": "discord" },
+  "activeHours": { "start": "09:00", "end": "22:00" },
+  "autoPurchase": {
+    "enabled": false,
+    "funbox": {
+      "enabled": false,
+      "action": "checkout",
+      "quantity": 1,
+      "payment": "virtual_atm_home",
+      "buyKeywords": [],
+      "skipBuyKeywords": [],
+      "priorityKeywords": []
+    },
+    "eslite": {
+      "enabled": false,
+      "action": "checkout",
+      "quantity": 1,
+      "payment": "virtual_atm_home",
+      "buyMode": "allow_list",
+      "buyKeywords": [],
+      "skipBuyKeywords": [],
+      "priorityKeywords": []
+    }
+  },
+  "japanAuctions": { "enabled": false, "targets": [] },
+  "amazonJp": { "enabled": false, "watchProducts": [], "xSignalUrls": [] },
+  "amazonJpProductOrders": {},
+  "retiredFeatures": { "facebook": "archived" }
+}
