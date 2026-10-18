@@ -1,0 +1,23 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm,readFile} from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import {Store,identity,guard} from './core.mjs';
+import {createCloud} from './server.mjs';
+import {scan,sources} from './sources.mjs';
+const event={source:'cloud',site:'funbox',productId:'BX-01',stockSignature:'in-stock',price:399,title:'Fixture BX-01',observedAt:'2026-10-19T01:00:01.000Z'};
+test('all purchase capability configuration is fail-closed',()=>{for(const key of ['autoPurchase','checkout','payment','login','cookies','cart','credentials','webhook']){assert.throws(()=>guard({[key]:true},{}));guard({[key]:false},{});}assert.throws(()=>guard({}, {AUTO_PURCHASE_ENABLED:'true'}));});
+test('identity canonicalization, price/stock/window separation and malformed input',()=>{assert.equal(identity(event).eventId,identity({...event,site:' FUNBOX ',source:'local'}).eventId);for(const patch of [{price:400},{stockSignature:'sold-out'},{observedAt:'2026-10-19T01:01:01Z'}])assert.notEqual(identity(event).eventId,identity({...event,...patch}).eventId);assert.throws(()=>identity({...event,observedAt:'bad'}));});
+test('HTTP cloud/local race, dry-run exactly once, restart recovery, prohibited routes',async()=>{const dir=await mkdtemp(path.join(os.tmpdir(),'cloud-test-'));const file=path.join(dir,'state.json');let app=await createCloud({file,fixture:true,env:{}});await new Promise(r=>app.server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+app.server.address().port;try{for(const url of ['/','/health','/api/cloud/status','/api/cloud/events'])assert.equal((await fetch(base+url)).status,200);
+ const send=e=>fetch(base+'/api/cloud/events',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(e)}).then(r=>r.json());
+ const results=await Promise.all([send(event),send({...event,source:'local',observedAt:'2026-10-19T01:00:00.900Z'})]);assert.equal(results.filter(x=>!x.duplicate).length,1);assert.equal(app.store.data.sink.length,1);assert.equal(app.store.data.events[0].winner,'local');assert.equal(Object.keys(app.store.data.events[0].firstSeen).length,2);
+ for(const url of ['/scan','/login','/checkout','/cart'])assert.equal((await fetch(base+url,{method:'POST'})).status,404);
+ assert.equal((await send({...event,source:'invalid'})).error,'Invalid source');
+ await assert.rejects(()=>createCloud({file,fixture:true,env:{}}),/EEXIST/);
+ await app.close();app=null;const restored=await new Store(file).load();await restored.ingest(event);assert.equal(restored.data.sink.length,1);assert.equal(restored.data.events[0].winner,'local');assert.equal(JSON.parse(await readFile(file)).events.length,1);
+ }finally{if(app)await app.close();await rm(dir,{recursive:true,force:true});}});
+test('one failed source cannot prevent another source from parsing',async()=>{const fail={id:'bad',url:'https://example.invalid',parse:()=>[]};const good={id:'fixture',url:'https://example.invalid',parse:()=>[{id:'BX-01'}]};const results=await Promise.allSettled([scan(fail,async()=>{throw Error('browser unavailable')}),scan(good,async()=>new Response('<html>fixture</html>'))]);assert.equal(results[0].status,'rejected');assert.equal(results[1].value[0].id,'BX-01');});
+test('actual eslite adapter reuses public search parser',async()=>{const rows=await scan(sources.find(s=>s.id==='eslite'),async()=>new Response(JSON.stringify({results:[{id:'123',name:'BEYBLADE X BX-01 戰鬥陀螺',final_price:399,button_status:'can_buy'}]})));assert.equal(rows[0].id,'123');assert.equal(rows[0].available,true);});
+
+test('empty listings succeed and charset declared by response is honored',async()=>{const metrics={};const rows=await scan({id:'japan',url:'https://example.invalid',parse:text=>{assert.equal(text,'日本語');return [];}},async()=>new Response('日本語',{headers:{'content-type':'text/html; charset=utf-8'}}),metrics);assert.deepEqual(rows,[]);assert.equal(metrics.httpStatus,200);assert.equal(metrics.emptyResult,true);});

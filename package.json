@@ -7,7 +7,11 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "node scripts/check.mjs",
-    "check:edion": "node --check src/edion-browser-bridge.js && node --check extensions/edion-monitor/background.js && node --check extensions/edion-monitor/collector.js && node --check extensions/edion-monitor/runner.js && node --check extensions/edion-monitor/popup.js"
+    "check:edion": "node --check src/edion-browser-bridge.js && node --check extensions/edion-monitor/background.js && node --check extensions/edion-monitor/collector.js && node --check extensions/edion-monitor/runner.js && node --check extensions/edion-monitor/popup.js",
+    "start:cloud": "node --use-env-proxy cloud/server.mjs",
+    "test:cloud": "node --test cloud/*.test.mjs",
+    "check:cloud": "node --check cloud/core.mjs && node --check cloud/sources.mjs && node --check cloud/server.mjs",
+    "import:cloud": "node cloud/import-events.mjs"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
