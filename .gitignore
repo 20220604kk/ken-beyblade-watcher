@@ -42,3 +42,6 @@ Thumbs.db
 *session*.json
 # Retired Facebook drill depends on the separately archived FB modules.
 src/drill-runner.js
+*.kenvault
+*.kwkey
+.private-import-*/

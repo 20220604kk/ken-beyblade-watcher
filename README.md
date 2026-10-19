@@ -4,6 +4,8 @@
 
 **公司 Codex 請先讀 [完整移交文件](docs/HANDOFF_2026-10-19.md)，再讀 [操作安全規則](AGENTS.md)。**
 
+完整私人環境移植採兩階段：**先 `npm run handoff:phase1`，通過後才可讀取／匯入獨立加密私人包**。若要匯入私人資料，請使用新 clone，不先建立 `.env`／`config.json` 或啟動服務；確切步驟見 [私人資料移交](docs/PRIVATE_DATA_HANDOFF.md)。
+
 本版本從目前家用正式專案匯整，保留完整程式與去識別化的離線回歸測試；不是包含帳密／Cookie／訂單的整機備份。家裡的執行目錄與運行設定未被這次匯出修改。
 
 ## 功能與架構
@@ -57,6 +59,7 @@ FUNBOX／誠品／購物網站／日本網站／日亞／Chrome 連接器
 | `npm run test:commerce` | FUNBOX／誠品多角度離線驗收 |
 | `npm run audit:distribution` | 檢查 Git 待發佈內容不含私密檔案／已知敏感格式 |
 | `npm run verify:handoff` | 在隨機本機 port 與臨時目錄驗證乾淨啟動／網頁；不使用正式設定或帳號 |
+| `npm run handoff:phase1` | 公司第一階段完整驗收；全部成功才產生綁定本機與版本的收據，不讀私人包 |
 
 部分 `scripts/amazon-*.mjs` 是過往實驗工具，可能操作登入容器、購物車或交易；**不是安裝或驗收步驟，不要批次執行。**
 
@@ -77,6 +80,7 @@ FUNBOX／誠品／購物網站／日本網站／日亞／Chrome 連接器
 ## 文件入口
 
 - [完整移交：現況、安裝、架構、資料、安全接手與驗收](docs/HANDOFF_2026-10-19.md)
+- [第二階段私人資料／Cookie 匯入](docs/PRIVATE_DATA_HANDOFF.md)
 - [操作安全規則](AGENTS.md)
 - [移交驗證結果](docs/HANDOFF_VERIFICATION_2026-10-19.md)
 - [平台監控說明](docs/MONITORING.md)／[自動下單說明](docs/AUTO_PURCHASE.md)

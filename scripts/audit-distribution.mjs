@@ -33,7 +33,7 @@ if (privateRoot) {
   collect(credentials);
 }
 
-const forbidden = /^(?:data|records|logs|artifacts|node_modules|test-results|playwright-report)\/|^config\.json$|^\.env(?:\.|$)(?!example$)|(?:^|\/)\.credential-key$|\.(?:exe|dll|pdb|pem|key|har|zip|bundle|dmp|nupkg)$/i;
+const forbidden = /^(?:data|records|logs|artifacts|node_modules|test-results|playwright-report)\/|^\.private-import-|^config\.json$|^\.env(?:\.|$)(?!example$)|(?:^|\/)\.credential-key$|\.(?:exe|dll|pdb|pem|key|kwkey|kenvault|har|zip|bundle|dmp|nupkg)$/i;
 const secretPatterns = [
   /gh[pousr]_[A-Za-z0-9]{20,}/,
   /github_pat_[A-Za-z0-9_]{30,}/,
