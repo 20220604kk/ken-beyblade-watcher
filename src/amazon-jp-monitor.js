@@ -1,4 +1,6 @@
 import fs from 'node:fs/promises';
+import { AsyncLocalStorage } from 'node:async_hooks';
+import { amazonRetryAfterMs } from './amazon-read-scheduler.js';
 import { monitoringRoute } from './monitoring-resources.js';
 import path from 'node:path';
 import * as cheerio from 'cheerio';
@@ -344,7 +346,7 @@ export function amazonJapanTestNotification(selection = {}, savedProducts = []) 
 }
 
 export class AmazonJapanMonitor {
-  constructor({ dataDir, state, getConfig, getExcludeKeywords = () => [], notify, log = () => {}, fetcher = fetch, onAvailabilitySignal = async () => {} }) {
+  constructor({ dataDir, state, getConfig, getExcludeKeywords = () => [], notify, log = () => {}, fetcher = fetch, onAvailabilitySignal = async () => {}, readScheduler = null, getDelegatedAsins = () => new Set() }) {
     this.dataDir = dataDir;
     this.state = state;
     this.getConfig = getConfig;
@@ -359,6 +361,16 @@ export class AmazonJapanMonitor {
     this.running = false;
     this.locationReady = false;
     this.notFoundLoggedUrls = new Set();
+    this.readScheduler = readScheduler;
+    this.getDelegatedAsins = getDelegatedAsins;
+    this.operations = new AsyncLocalStorage();
+    this.lanePages = new Map();
+    this.backgroundRunning = false;
+    this.notificationPromise = null;
+    this.locationPromise = null;
+    this.closed = false;
+    this.generation = 0;
+    this.httpFallbacks = new Map();
   }
 
   storage() {
@@ -408,6 +420,15 @@ export class AmazonJapanMonitor {
   }
 
   async browserPage() {
+    const lane = this.operations.getStore()?.lane || 'all';
+    if (lane !== 'all') {
+      const existing = this.lanePages.get(lane);
+      if (existing && !existing.isClosed()) return existing;
+      const context = await this.ensureContext();
+      const page = await context.newPage();
+      this.lanePages.set(lane, page);
+      return page;
+    }
     if (this.page && !this.page.isClosed()) return this.page;
     const context = await this.ensureContext();
     this.page = context.pages().find((page) => !page.isClosed()) || await context.newPage();
@@ -415,6 +436,13 @@ export class AmazonJapanMonitor {
   }
 
   async ensureJapanLocation(page) {
+    if (this.locationReady) return;
+    if (!this.locationPromise) this.locationPromise = this.ensureJapanLocationOnce(page)
+      .finally(() => { this.locationPromise = null; });
+    return this.locationPromise;
+  }
+
+  async ensureJapanLocationOnce(page) {
     if (this.locationReady) return;
     const postalCode = clean(this.getConfig()?.postalCode || '100-0001');
     const match = postalCode.match(/^(\d{3})-?(\d{4})$/);
@@ -429,12 +457,16 @@ export class AmazonJapanMonitor {
         const trigger = page.locator(
           '#glow-ingress-block:visible, #nav-global-location-popover-link:visible'
         ).first();
-        await trigger.waitFor({ state: 'visible', timeout: 20_000 });
         const html = await page.content();
         const title = await page.title();
         const body = clean(await page.locator('body').innerText().catch(() => '')).slice(0, 1_000);
-        const issue = amazonJapanPageIssue({ status: response?.status(), title, body, html });
-        if (issue) throw amazonAccessError(issue, title || `HTTP ${response?.status() || 'unknown'}`);
+        const retryAfterMs = amazonRetryAfterMs(response?.headers?.()['retry-after']);
+        const issue = response?.headers?.()['retry-after'] ? 'rate_limited'
+          : amazonJapanPageIssue({ status: response?.status(), title, body, html });
+        this.recordReadDiagnostic({ url: 'https://www.amazon.co.jp/', status: response?.status(), transport: 'browser', issue, retryAfterMs });
+        if (issue) throw Object.assign(amazonAccessError(issue, title || `HTTP ${response?.status() || 'unknown'}`),
+          { httpStatus: response?.status(), retryAfterMs, requestKind: 'location' });
+        await trigger.waitFor({ state: 'visible', timeout: 20_000 });
 
         lastLocation = clean(await page.locator('#glow-ingress-line2').innerText().catch(() => ''));
         if (lastLocation.includes(`${match[1]}-${match[2]}`)) {
@@ -481,6 +513,81 @@ export class AmazonJapanMonitor {
   }
 
   async loadPage(url) {
+    const lane = this.operations.getStore()?.lane || 'all';
+    const generation = this.operations.getStore()?.generation ?? this.generation;
+    const kind = new URL(url).pathname === '/s' ? 'search'
+      : /\/dp\/|\/gp\/product\//.test(new URL(url).pathname) ? 'product' : 'brand';
+    const startedAt = Date.now();
+    const useHttp = lane === 'background' && kind === 'product' && (this.httpFallbacks.get(url) || 0) <= Date.now();
+    const read = async () => {
+      try {
+        const html = useHttp
+          ? await this.loadProductHttp(url) : await this.loadBrowserPage(url);
+        return html;
+      } catch (error) {
+        // A valid HTTP 200 with incomplete HTML may need rendering next round.
+        // Never switch transports in response to throttling or verification.
+        if (useHttp && error.code === 'AMAZON_PRODUCT_UNREADABLE') this.httpFallbacks.set(url, Date.now() + 30 * 60_000);
+        error.requestKind ||= kind;
+        throw error;
+      } finally {
+        this.storage().lastReadDurationMs = Date.now() - startedAt;
+      }
+    };
+    return this.readScheduler ? this.readScheduler.run({ lane: kind === 'search' ? 'search'
+      : lane === 'background' ? 'background' : 'confirmation', scope: 'general-monitor', key: url,
+      canStart: () => !this.closed && generation === this.generation && this.getConfig()?.enabled !== false }, read) : read();
+  }
+
+  recordReadDiagnostic({ url, status, transport, issue = '', retryAfterMs = 0 }) {
+    const lane = this.operations.getStore()?.lane || 'all';
+    const diagnostic = { at: new Date().toISOString(), lane, kind: new URL(url).pathname === '/' ? 'location' : new URL(url).pathname === '/s' ? 'search'
+      : /\/dp\/|\/gp\/product\//.test(new URL(url).pathname) ? 'product' : 'brand',
+      httpStatus: Number(status) || 0, transport, issue, retryAfterMs };
+    this.storage().recentReads = [...(this.storage().recentReads || []), diagnostic].slice(-40);
+    this.storage()[lane === 'background' ? 'lastBackgroundDiagnostic' : 'lastSearchDiagnostic'] = diagnostic;
+    return diagnostic;
+  }
+
+  async loadProductHttp(url) {
+    const page = await this.browserPage();
+    await this.ensureJapanLocation(page);
+    const context = await this.ensureContext();
+    const target = new URL(url);
+    if (target.origin !== 'https://www.amazon.co.jp') throw new Error('日亞監控拒絕跨網域商品請求');
+    target.searchParams.set('language', 'ja_JP');
+    target.searchParams.set('currency', 'JPY');
+    let response;
+    try {
+      response = await context.request.get(target.href, { timeout: 15_000, maxRetries: 0, maxRedirects: 0 });
+      const html = await response.text();
+      const $ = cheerio.load(html);
+      const status = response.status();
+      const retryAfterMs = amazonRetryAfterMs(response.headers()['retry-after']);
+      const issue = response.headers()['retry-after'] ? 'rate_limited' : amazonJapanPageIssue({
+        status, title: $('title').text(), body: $('body').text().slice(0, 800), html
+      });
+      this.recordReadDiagnostic({ url, status, transport: 'web_http', issue, retryAfterMs });
+      if (issue && issue !== 'not_found') throw Object.assign(amazonAccessError(issue), { httpStatus: status, retryAfterMs });
+      if (issue === 'not_found') return html;
+      if (status !== 200) throw Object.assign(new Error(`日亞網頁商品 HTTP ${status}，本輪不切換讀取方式`),
+        { code: 'AMAZON_HTTP_REJECTED', httpStatus: status });
+      if ($('#ap_email, form[name="signIn"]').length) {
+        throw Object.assign(new Error('日亞監控商品頁要求登入'), { code: 'AMAZON_LOGIN_REQUIRED', httpStatus: status });
+      }
+      const offer = parseAmazonOffer(html, extractAmazonAsin(url));
+      const explicitUnavailable = /現在在庫切れ|一時的に在庫切れ|現在お取り扱い|Currently unavailable|暂时缺货|目前無貨|在庫切れ/i
+        .test($('#availability, #outOfStock, #availability_feature_div, #availabilityInsideBuyBox_feature_div').text());
+      if (status !== 200 || !$('#productTitle').text().trim()
+        || !offer.buyButtonPresent && !explicitUnavailable || offer.buyButtonPresent && !(offer.priceYen > 0)) {
+        this.recordReadDiagnostic({ url, status, transport: 'web_http', issue: 'product_unreadable' });
+        throw Object.assign(new Error('日亞網頁 HTTP 商品資料不完整，保留既有狀態'), { code: 'AMAZON_PRODUCT_UNREADABLE', httpStatus: status });
+      }
+      return html;
+    } finally { await response?.dispose?.().catch(() => {}); }
+  }
+
+  async loadBrowserPage(url) {
     const page = await this.browserPage();
     await this.ensureJapanLocation(page);
     const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60_000 });
@@ -498,7 +605,10 @@ export class AmazonJapanMonitor {
     const html = await page.content();
     const title = await page.title();
     const body = clean(await page.locator('body').innerText().catch(() => '')).slice(0, 800);
-    const issue = amazonJapanPageIssue({ status: response?.status(), title, body, html });
+    const retryAfterMs = amazonRetryAfterMs(response?.headers?.()['retry-after']);
+    const issue = response?.headers?.()['retry-after'] ? 'rate_limited'
+      : amazonJapanPageIssue({ status: response?.status(), title, body, html });
+    this.recordReadDiagnostic({ url, status: response?.status(), transport: 'browser', issue, retryAfterMs });
     if (issue === 'not_found') {
       if (!this.notFoundLoggedUrls.has(url)) {
         this.notFoundLoggedUrls.add(url);
@@ -506,7 +616,8 @@ export class AmazonJapanMonitor {
       }
       return html;
     }
-    if (issue) throw amazonAccessError(issue, title || `HTTP ${response?.status() || 'unknown'}`);
+    if (issue) throw Object.assign(amazonAccessError(issue, title || `HTTP ${response?.status() || 'unknown'}`),
+      { httpStatus: response?.status(), retryAfterMs });
     if (html.length < 1000) throw new Error('Amazon.co.jp 回傳不完整頁面，本輪不更新基線');
     return html;
   }
@@ -753,9 +864,35 @@ export class AmazonJapanMonitor {
     return { pending, successful, observed };
   }
 
-  async scan({ forceCatalog = false } = {}) {
-    if (this.running) return { skipped: true };
-    this.running = true;
+  async flushNotifications() {
+    if (this.notificationPromise) return this.notificationPromise;
+    this.notificationPromise = (async () => {
+      const pending = this.storage().pendingAvailabilityNotifications ||= {};
+      let count = 0;
+      for (const [asin, entry] of Object.entries(pending)) {
+        const { product, kind } = entry;
+        const message = amazonJapanNotification(product, { kind, xConfirmed: Boolean(this.storage().xSignals?.[asin]) });
+        const messageId = await this.notify(message.text, message.options);
+        if (pending[asin] === entry) delete pending[asin];
+        this.log(`日亞通知已送出：${product.code}｜ASIN ${asin}｜Discord 訊息 ID ${messageId || 'ok'}。`);
+        count++;
+      }
+      await this.state.save();
+      return count;
+    })().finally(() => { this.notificationPromise = null; });
+    return this.notificationPromise;
+  }
+
+  async scan(options = {}) {
+    const lane = options.lane || 'all';
+    return this.operations.run({ lane, generation: this.generation }, () => this.scanLane({ ...options, lane }));
+  }
+
+  async scanLane({ forceCatalog = false, lane = 'all', rotateBackground = true } = {}) {
+    const flag = lane === 'background' ? 'backgroundRunning' : 'running';
+    if (this[flag]) return { skipped: true };
+    this[flag] = true;
+    this.closed = false;
     const startedAt = Date.now();
     const storage = this.storage();
     // Keep this round's comparison baseline stable while committing each
@@ -773,20 +910,13 @@ export class AmazonJapanMonitor {
       notificationsStarted = true;
       // Discord delivery may wait, but all purchase signals are already handed
       // off. Also deliver observations if a later page aborts this round.
-      for (const [asin, { product, kind }] of Object.entries(pendingNotifications)) {
-        const message = amazonJapanNotification(product, {
-          kind, xConfirmed: Boolean(storage.xSignals?.[product.asin])
-        });
-        const messageId = await this.notify(message.text, message.options);
-        delete pendingNotifications[asin];
-        this.log(`日亞通知已送出：${product.code}｜ASIN ${product.asin}｜Discord 訊息 ID ${messageId || 'ok'}。`);
-        notified += 1;
-      }
+      if (lane === 'all') notified += await this.flushNotifications();
+      else void this.flushNotifications().catch(error => this.log(`日亞通知待重試（監控繼續）：${error.message}`));
     };
     const observe = (product) => {
+      const old = storage.products[product.asin];
       storage.products[product.asin] = product;
       if (!storage.initialized || discoveryUpgrade || !product.available) return;
-      const old = previous[product.asin];
       const kind = !old ? 'new' : old.available === false ? 'restock' : '';
       if (!kind || availabilityEvents.has(product.asin)) return;
       availabilityEvents.set(product.asin, { product, kind });
@@ -802,8 +932,9 @@ export class AmazonJapanMonitor {
     };
     try {
       await this.ensureSeedSignals();
-      const catalog = await this.refreshCatalog(storage, forceCatalog);
-      const brandProducts = await this.refreshBrandProducts(storage, forceCatalog);
+      const catalog = lane === 'search' && storage.catalog.length && !forceCatalog
+        ? storage.catalog : await this.refreshCatalog(storage, forceCatalog);
+      const brandProducts = lane === 'search' ? storage.brandProducts : await this.refreshBrandProducts(storage, forceCatalog);
       const normalizeKnownProduct = (product, source) => {
         const asin = clean(product?.asin || extractAmazonAsin(product?.url)).toUpperCase();
         const title = clean(product?.title || product?.name);
@@ -847,17 +978,31 @@ export class AmazonJapanMonitor {
           pricingSource: 'manual_pre_catalog'
         }));
       const pricingCatalog = [...catalog, ...manualPricing];
-      const dedicated = await this.inspectDedicatedPreCatalogProducts(
-        configuredWatch,
+      const delegated = lane === 'background' ? this.getDelegatedAsins() : new Set();
+      const dedicated = lane === 'search' ? { pending: [], successful: 0, observed: [] } : await this.inspectDedicatedPreCatalogProducts(
+        configuredWatch.filter(product => !delegated.has(product.asin)),
         catalog,
         pricingCatalog,
         storage,
         observe
       );
       const dedicatedPendingAsins = new Set(dedicated.pending.map((product) => product.asin));
-      const searchHtml = await this.loadPage(AMAZON_JP_SEARCH_URL);
-      const searchProducts = parseAmazonSellerSearch(searchHtml);
-      if (!searchProducts.length) throw new Error('Amazon.co.jp 官方賣家搜尋沒有可解析商品，本輪不更新基線');
+      const searchHtml = lane === 'background' ? '' : await this.loadPage(AMAZON_JP_SEARCH_URL);
+      const searchProducts = lane === 'background' ? [] : parseAmazonSellerSearch(searchHtml);
+      if (lane !== 'background' && !searchProducts.length) throw Object.assign(new Error('Amazon.co.jp 官方賣家搜尋沒有可解析商品，本輪不更新基線'), { code: 'AMAZON_SEARCH_UNREADABLE', requestKind: 'search' });
+      if (lane !== 'background') {
+        storage.lastSearchAsins = searchProducts.map(product => product.asin);
+        storage.lastSearchReadAt = new Date().toISOString();
+        storage.pendingDiscoveries ||= {};
+        for (const product of searchProducts) {
+          if (product.code && !japanProductBlacklistMatch(product, this.getExcludeKeywords())
+            && !previous[product.asin] && !storage.pendingDiscoveries[product.asin]) {
+            storage.pendingDiscoveries[product.asin] = { asin: product.asin, code: product.code, title: product.title,
+              discoveredAt: storage.lastSearchReadAt, status: 'pending_confirmation' };
+          }
+        }
+        storage.pendingDiscoveries = Object.fromEntries(Object.entries(storage.pendingDiscoveries).slice(-100));
+      }
       const blacklist = this.getExcludeKeywords();
       const blacklistedRows = searchProducts.filter((product) => japanProductBlacklistMatch(product, blacklist));
       // The broad seller search is useful for discovering new ASINs, but it is
@@ -868,6 +1013,9 @@ export class AmazonJapanMonitor {
         if (!product.code) return false;
         if (japanProductBlacklistMatch(product, blacklist)) return false;
         return true;
+      }).sort((a, b) => {
+        const priority = product => !previous[product.asin] ? 0 : previous[product.asin].available === false ? 1 : 2;
+        return priority(a) - priority(b);
       });
       const observed = new Map(dedicated.observed.map((product) => [product.asin, product]));
       const rejected = blacklistedRows.map((product) => ({
@@ -918,16 +1066,20 @@ export class AmazonJapanMonitor {
         }
         observed.set(verified.asin, verified);
         observe(verified);
+        if (storage.pendingDiscoveries?.[verified.asin]) {
+          storage.pendingDiscoveries[verified.asin].status = verified.available ? 'confirmed_available' : 'confirmed_unavailable';
+          storage.pendingDiscoveries[verified.asin].confirmedAt = new Date().toISOString();
+        }
         if (!verified.available) rejected.push(verified);
       }
 
       const searchAsins = new Set(candidateRows.map((product) => product.asin));
       const watchSelection = roundRobinRows(
-        configuredWatch.filter((product) => !dedicatedPendingAsins.has(product.asin)),
+        lane === 'search' || !rotateBackground ? [] : configuredWatch.filter((product) => !dedicatedPendingAsins.has(product.asin)),
         storage.watchCursor,
         this.getConfig()?.watchBatchSize || 2
       );
-      storage.watchCursor = watchSelection.nextCursor;
+      if (lane !== 'search' && rotateBackground) storage.watchCursor = watchSelection.nextCursor;
 
       const backgroundRegistry = new Map();
       for (const product of [...Object.values(brandProducts || {}), ...Object.values(previous)]) {
@@ -938,14 +1090,17 @@ export class AmazonJapanMonitor {
         backgroundRegistry.set(normalized.asin, { ...old, ...normalized });
       }
       const backgroundSelection = roundRobinRows(
-        [...backgroundRegistry.values()],
+        lane === 'search' || !rotateBackground ? [] : [...backgroundRegistry.values()],
         storage.backgroundCursor,
         this.getConfig()?.backgroundBatchSize || 1
       );
-      storage.backgroundCursor = backgroundSelection.nextCursor;
+      if (lane !== 'search' && rotateBackground) storage.backgroundCursor = backgroundSelection.nextCursor;
+      const recentlySearched = lane === 'background' && Date.now() - Date.parse(storage.lastSearchReadAt || '') < 30_000
+        ? new Set(storage.lastSearchAsins || []) : new Set();
+      storage.lastDelegatedCount = lane === 'background' ? delegated.size : storage.lastDelegatedCount || 0;
       const directRows = [...watchSelection.rows, ...backgroundSelection.rows]
         .filter((product, index, all) => all.findIndex((item) => item.asin === product.asin) === index)
-        .filter((product) => !searchAsins.has(product.asin));
+        .filter((product) => !searchAsins.has(product.asin) && !recentlySearched.has(product.asin) && !delegated.has(product.asin));
 
       for (const product of directRows) {
         const catalogItem = matchTakaraTomyCatalog(product, pricingCatalog);
@@ -969,33 +1124,42 @@ export class AmazonJapanMonitor {
       }
 
       const eligible = [...observed.values()].filter((product) => product.available);
-      const current = { ...previous };
-      for (const [asin, product] of observed) current[asin] = product;
+      // Observations were committed individually. Never replace the shared
+      // registry with an older lane snapshot while the other lane is running.
+      const current = storage.products;
       const discovered = [...availabilityEvents.values()].filter(({ kind }) => kind === 'new').length;
       const restocked = [...availabilityEvents.values()].filter(({ kind }) => kind === 'restock').length;
       await notifyObserved();
-      storage.initialized = true;
-      storage.searchDiscoveryVersion = 1;
+      if (lane !== 'background') {
+        storage.initialized = true;
+        storage.searchDiscoveryVersion = 1;
+      }
       storage.products = current;
-      storage.lastScanAt = new Date().toISOString();
-      storage.lastSearchCount = searchProducts.length;
-      storage.lastExcludedCount = blacklistedRows.length;
-      storage.lastCandidateCount = candidateRows.length;
-      storage.lastDirectCheckedCount = directRows.length + dedicated.pending.length;
+      const checkedAt = new Date().toISOString();
+      if (lane === 'background') storage.lastBackgroundScanAt = checkedAt;
+      else storage.lastScanAt = checkedAt;
+      if (lane !== 'background') storage.lastSearchCount = searchProducts.length;
+      if (lane !== 'background') {
+        storage.lastExcludedCount = blacklistedRows.length;
+        storage.lastCandidateCount = candidateRows.length;
+      }
+      storage[lane === 'background' ? 'lastBackgroundDirectCheckedCount' : 'lastDirectCheckedCount'] = directRows.length + dedicated.pending.length;
       storage.lastKnownCount = Object.keys(current).length;
       storage.lastEligibleCount = eligible.length;
-      storage.lastRejected = rejected.slice(0, 30).map((product) => ({
+      storage[lane === 'background' ? 'lastBackgroundRejected' : 'lastRejected'] = rejected.slice(0, 30).map((product) => ({
         asin: product.asin,
         code: product.code,
         title: product.title,
         reason: product.rejectionReason
       }));
-      storage.lastError = '';
+      storage[lane === 'background' ? 'lastBackgroundError' : 'lastError'] = '';
+      storage[lane === 'background' ? 'lastBackgroundErrorCode' : 'lastErrorCode'] = '';
       await this.state.save();
       const lastBrandSnapshotCount = storage.lastBrandSnapshotCount || Object.keys(brandProducts).length;
-      this.log(`日亞官方原價：官方定價 ${catalog.length} 件、定價前專線 ${dedicated.pending.length} 件（成功 ${dedicated.successful} 件）、品牌 ASIN 基線 ${Object.keys(brandProducts).length} 件（最近品牌頁 ${lastBrandSnapshotCount} 件）、Amazon.co.jp 搜尋 ${searchProducts.length} 件、搜尋候選 ${candidateRows.length} 件、一般直接核對 ${directRows.length} 件、已知商品 ${Object.keys(current).length} 件、合格 ${eligible.length} 件、通知 ${notified} 則。`);
+      this.log(`日亞官方原價${lane === 'background' ? '背景複查' : ''}：官方定價 ${catalog.length} 件、定價前專線 ${dedicated.pending.length} 件（成功 ${dedicated.successful} 件）、品牌 ASIN 基線 ${Object.keys(brandProducts).length} 件（最近品牌頁 ${lastBrandSnapshotCount} 件）、Amazon.co.jp 搜尋 ${searchProducts.length} 件、搜尋候選 ${candidateRows.length} 件、一般直接核對 ${directRows.length} 件、單品任務分擔 ${delegated.size} 件、已知商品 ${Object.keys(current).length} 件、合格 ${eligible.length} 件、通知 ${notified} 則。`);
       return {
-        checkedAt: storage.lastScanAt,
+        checkedAt,
+        lane,
         catalogCount: catalog.length,
         brandAsinCount: Object.keys(brandProducts).length,
         searchCount: searchProducts.length,
@@ -1014,8 +1178,9 @@ export class AmazonJapanMonitor {
         eligible: eligible.map((item) => ({ asin: item.asin, code: item.code, title: item.title, priceYen: item.priceYen, msrpYen: item.msrpYen }))
       };
     } catch (error) {
-      storage.lastAttemptAt = new Date().toISOString();
-      storage.lastError = error.message;
+      storage[lane === 'background' ? 'lastBackgroundAttemptAt' : 'lastAttemptAt'] = new Date().toISOString();
+      storage[lane === 'background' ? 'lastBackgroundError' : 'lastError'] = error.message;
+      storage[lane === 'background' ? 'lastBackgroundErrorCode' : 'lastErrorCode'] = error.code || 'AMAZON_SCAN_FAILED';
       await this.state.save();
       if (!notificationsStarted) {
         await notifyObserved().catch((notificationError) => this.log(`日亞部分掃描通知失敗：${notificationError.message}`));
@@ -1023,11 +1188,15 @@ export class AmazonJapanMonitor {
       }
       if (error?.code === 'AMAZON_RATE_LIMITED' || error?.code === 'AMAZON_LOADING_SHELL'
         || /Timeout|頁面.*關閉|context.*closed/i.test(error.message)) {
-        await this.close();
+        if (lane === 'all') await this.close();
+        else {
+          await this.lanePages.get(lane)?.close().catch(() => {});
+          this.lanePages.delete(lane);
+        }
       }
       throw error;
     } finally {
-      this.running = false;
+      this[flag] = false;
     }
   }
 
@@ -1064,6 +1233,9 @@ export class AmazonJapanMonitor {
       .sort((a, b) => Date.parse(b.addedAt || b.updatedAt || 0) - Date.parse(a.addedAt || a.updatedAt || 0));
     return {
       ...storage,
+      backgroundScanning: this.backgroundRunning,
+      notificationSending: Boolean(this.notificationPromise),
+      readScheduler: this.readScheduler?.status() || null,
       catalogCount: storage.catalog?.length || 0,
       brandAsinCount: Object.keys(storage.brandProducts || {}).length,
       xSignalCount: Object.keys(storage.xSignals || {}).length,
@@ -1077,7 +1249,10 @@ export class AmazonJapanMonitor {
   }
 
   async close() {
+    this.closed = true;
+    this.generation++;
     await this.context?.close().catch(() => {});
+    this.lanePages.clear();
     this.context = null;
     this.contextPromise = null;
     this.page = null;

@@ -423,7 +423,7 @@ export class AmazonJpHttpClient {
         const raw = responseHeaders['retry-after'];
         const retry = /^\d+$/.test(raw || '') ? Number(raw) * 1000 : Date.parse(raw || '') - Date.now();
         throw Object.assign(fail(`日亞 HTTP ${status}，停止本輪並降速`, 'AMAZON_RATE_LIMITED'),
-          { retryAfterMs: Math.max(60_000, Number.isFinite(retry) ? retry : 0) });
+          { httpStatus: status, retryAfterMs: Math.max(60_000, Number.isFinite(retry) ? retry : 0) });
       }
       if ([301, 302, 303, 307, 308].includes(status)) {
         if (method === 'POST' && [307, 308].includes(status)) throw fail('日亞要求重送 POST，保留狀態並停止，不重送');

@@ -101,7 +101,7 @@ export function validateAmazonJpProductCheckout(checkout, { asin, code, msrpYen,
 }
 
 export class AmazonJpProductOrderMonitor {
-  constructor({ dataDir, state, getConfig, slot = 'A', storageKey, profileName, onTerminal = async () => {}, notifyPrivate = async () => {}, log = () => {}, orderHistory, checkoutRunner = advanceAmazonJpCheckout, httpClientFactory = options => new AmazonJpHttpClient(options), persistentContextLauncher = (userDataDir, options) => chromium.launchPersistentContext(userDataDir, options) }) {
+  constructor({ dataDir, state, getConfig, slot = 'A', storageKey, profileName, onTerminal = async () => {}, notifyPrivate = async () => {}, log = () => {}, orderHistory, checkoutRunner = advanceAmazonJpCheckout, httpClientFactory = options => new AmazonJpHttpClient(options), persistentContextLauncher = (userDataDir, options) => chromium.launchPersistentContext(userDataDir, options), readScheduler = null }) {
     this.state = state;
     this.getConfig = getConfig;
     this.onTerminal = onTerminal;
@@ -136,6 +136,7 @@ export class AmazonJpProductOrderMonitor {
     this.refreshCount = 0;
     this.signalChecks = [];
     this.maintenancePollCount = 0;
+    this.readScheduler = readScheduler;
   }
 
   mode() { return normalizeAmazonJpProductMode(this.getConfig()?.mode); }
@@ -767,6 +768,7 @@ export class AmazonJpProductOrderMonitor {
       let snapshot;
       if (signal) storage.lastSignalF5LatencyMs = Math.max(0, Date.now() - signal.matchedAt);
       await this.recordStep('refresh_start', { asin: targetAsin, step: 1, transport: this.transport() });
+      const readSnapshot = async () => {
       if (this.transport() === 'api') {
         apiClient = await this.httpClient();
         snapshot = this.fastLaneEnabled() && typeof apiClient.readDirectOffer === 'function'
@@ -786,6 +788,11 @@ export class AmazonJpProductOrderMonitor {
       }
       snapshot = await this.productSnapshot(page, response?.status() || 200);
       }
+      return snapshot;
+      };
+      snapshot = this.readScheduler ? await this.readScheduler.run({ lane: 'single', scope: this.profileDirectory,
+        key: targetAsin, canStart: () => !this.hasPendingApiTransaction() && this.storage().status !== 'needs_review'
+          && (!purchase || this.canSchedule()) }, readSnapshot) : await readSnapshot();
       const msrp = this.resolveMsrp(snapshot);
       const productMismatch = snapshot.asin !== targetAsin
         || Boolean(signal?.code && snapshot.code && signal.code !== snapshot.code);

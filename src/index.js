@@ -2,6 +2,7 @@ import fsSync from 'node:fs';
 import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { OperationalLogPolicy } from './log-policy.js';
+import { AmazonReadScheduler } from './amazon-read-scheduler.js';
 import { safePurchaseText } from './purchase-diagnostics.js';
 import { catalogListPatch } from './product-sheet-catalog.js';
 import fs from 'node:fs/promises';
@@ -895,9 +896,20 @@ const edionBrowser = new EdionBrowserBridge({
   log: message => log(message, 'japan'),
   notify: text => sendNotification(text, { channelMode: 'discord', discordAudience: 'private' })
 });
+const amazonReadScheduler = new AmazonReadScheduler();
+let amazonJpBackgroundTimer = null;
+let amazonJpBackgroundRotationAt = 0;
 const amazonJapanMonitor = new AmazonJapanMonitor({
   dataDir,
   state,
+  readScheduler: amazonReadScheduler,
+  getDelegatedAsins: () => new Set(amazonJpProductOrders.filter(monitor => {
+    const saved = monitor.storage();
+    return monitor.getConfig()?.enabled && !monitor.interactive && !saved.lastError
+      && !monitor.hasPendingApiTransaction() && Date.now() - Date.parse(saved.lastCheckedAt || '') < 8000
+      && saved.lastSnapshot?.diagnostic?.httpStatus === 200 && saved.lastSnapshot?.diagnostic?.hasProductTitle
+      && !saved.lastSnapshot?.pageIssue;
+  }).map(monitor => monitor.storage().targetAsin)),
   getConfig: () => config.amazonJp,
   getExcludeKeywords: () => config.japanAuctions.excludeKeywords,
   log: (message) => log(message, 'japan'),
@@ -1003,6 +1015,7 @@ const autoPurchase = new AutoPurchaseCoordinator({
 const amazonOrderHistory = new AmazonOrderHistory(dataDir, { log: (message) => log(message, 'japan') });
 const amazonRaceCoordinator = new AmazonRaceCoordinator({ state, getConfig: slot => config.amazonJpProductOrders[slot] });
 const amazonJpProductOrders = ['A', 'B', 'C'].map((slot) => new AmazonJpProductOrderMonitor({
+  readScheduler: amazonReadScheduler,
   dataDir,
   state,
   slot,
@@ -2061,17 +2074,44 @@ function scheduleJapan({ immediate = false, targetId = null } = {}) {
   for (const target of config.japanAuctions.targets.filter((item) => item.enabled !== false)) scheduleJapanTarget(target, { immediate });
 }
 
-function clearAmazonJpSchedule() {
+function clearAmazonJpSchedule({ background = true } = {}) {
   if (amazonJpTimer) clearTimeout(amazonJpTimer);
   amazonJpTimer = null;
   runtime.nextAmazonJpAt = null;
+  amazonReadScheduler.reserveSearch(null);
+  if (background) {
+    clearTimeout(amazonJpBackgroundTimer);
+    amazonJpBackgroundTimer = null;
+  }
+}
+
+function scheduleAmazonJpBackground(delayMs = 5000) {
+  if (amazonJpBackgroundTimer || !config.amazonJp.enabled) return;
+  amazonJpBackgroundTimer = setTimeout(async () => {
+    const startedAt = Date.now();
+    let nextDelay = Math.min(20, Math.max(15, config.amazonJp.intervalSeconds || 20)) * 1000;
+    try {
+      if (config.amazonJp.enabled) {
+        const rotateBackground = Date.now() - amazonJpBackgroundRotationAt >= 30_000;
+        await amazonJapanMonitor.scan({ lane: 'background', rotateBackground });
+        if (rotateBackground) amazonJpBackgroundRotationAt = Date.now();
+        nextDelay = Math.max(250, nextDelay - (Date.now() - startedAt));
+      }
+    } catch (error) {
+      nextDelay = Math.max(60_000, error.retryAfterMs || 0);
+      log(`日亞背景複查失敗：${error.message}｜類別 ${error.code || 'AMAZON_SCAN_FAILED'}｜${Math.ceil(nextDelay / 1000)} 秒後重試。`, 'japan');
+    } finally {
+      amazonJpBackgroundTimer = null;
+      if (config.amazonJp.enabled) scheduleAmazonJpBackground(nextDelay);
+    }
+  }, delayMs);
 }
 
 async function runAmazonJpScan(options = {}) {
   if (runtime.amazonJpScanning) return { skipped: true };
   runtime.amazonJpScanning = true;
   try {
-    const result = await amazonJapanMonitor.scan(options);
+    const result = await amazonJapanMonitor.scan({ lane: 'search', ...options });
     if (!result.skipped) runtime.lastAmazonJpScan = result;
     return result;
   } finally {
@@ -2080,7 +2120,7 @@ async function runAmazonJpScan(options = {}) {
 }
 
 function scheduleAmazonJp({ immediate = false, delayMs = null } = {}) {
-  clearAmazonJpSchedule();
+  clearAmazonJpSchedule({ background: false });
   if (!config.amazonJp.enabled) return;
   const configuredDelay = (config.amazonJp.adaptiveIntervalEnabled
     ? runtime.amazonJpAdaptiveIntervalSeconds
@@ -2091,9 +2131,12 @@ function scheduleAmazonJp({ immediate = false, delayMs = null } = {}) {
       ? Math.max(0, Number(delayMs))
       : configuredDelay;
   runtime.nextAmazonJpAt = new Date(Date.now() + delay).toISOString();
+  amazonReadScheduler.reserveSearch(Date.now() + delay);
+  scheduleAmazonJpBackground();
   amazonJpTimer = setTimeout(async () => {
     amazonJpTimer = null;
     runtime.nextAmazonJpAt = null;
+    amazonReadScheduler.reserveSearch(null);
     const cycleStartedAt = Date.now();
     let nextDelay = configuredDelay;
     try {
@@ -2115,11 +2158,12 @@ function scheduleAmazonJp({ immediate = false, delayMs = null } = {}) {
         'blocked'
       );
       runtime.amazonJpCadenceMode = 'recovery';
-      nextDelay = runtime.amazonJpAdaptiveIntervalSeconds * 1000;
+      nextDelay = Math.max(runtime.amazonJpAdaptiveIntervalSeconds * 1000, error.retryAfterMs || 0,
+        error.code === 'AMAZON_RATE_LIMITED' ? 60_000 : 0);
       runtime.amazonJpBackoffUntil = new Date(Date.now() + nextDelay).toISOString();
       log(
-        `日亞官方原價掃描失敗：${error.message}｜第 ${runtime.amazonJpFailureCount} 次連續失敗，`
-        + `線性降速至 ${runtime.amazonJpAdaptiveIntervalSeconds} 秒後重試。`,
+        `日亞官方原價掃描失敗：${error.message}｜類別 ${error.code || 'AMAZON_SCAN_FAILED'}、頁面 ${error.requestKind || 'unknown'}｜第 ${runtime.amazonJpFailureCount} 次連續失敗，`
+        + `降速至 ${Math.ceil(nextDelay / 1000)} 秒後重試。`,
         'japan'
       );
     } finally {
@@ -3567,7 +3611,7 @@ const dashboard = createDashboard({
       runtime.amazonJpBackoffUntil = null;
       await amazonJapanMonitor.close();
     }
-    log(`日亞官方原價監控已${config.amazonJp.enabled ? '啟用' : '暫停'}：線性浮動 15～20 秒，阻擋時 40～60 秒｜日本郵遞區號 ${config.amazonJp.postalCode}。`, 'japan');
+    log(`日亞官方原價監控已${config.amazonJp.enabled ? '啟用' : '暫停'}：線性浮動 15～20 秒，限流至少 60 秒並遵守 Retry-After｜日本郵遞區號 ${config.amazonJp.postalCode}。`, 'japan');
     return { message: config.amazonJp.enabled ? '日亞官方原價監控已儲存並立即檢查。' : '日亞官方原價監控已暫停；其他監控不受影響。' };
   },
   onAddAmazonJpProduct: async (body) => {
@@ -4198,6 +4242,7 @@ function shutdown(reason = 'shutdown', exitCode = 0) {
     clearDutyNotificationSchedule();
     clearDiscordAutomationSchedule();
     dashboard.close();
+    amazonReadScheduler.close();
     const results = await Promise.allSettled([
       scanner.close(),
       closeAllFormAutoFillWorkers(),
