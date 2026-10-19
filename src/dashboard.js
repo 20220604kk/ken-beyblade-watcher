@@ -11,6 +11,7 @@ import { purchaseListSortClient } from './purchase-list-sort.js';
 import { purchaseReadinessClient } from './purchase-readiness.js';
 import { isEsliteAccountSlot, esliteSlotClient } from './eslite-account-slots.js';
 import { ProductSheetCatalog, catalogListState } from './product-sheet-catalog.js';
+import { safePurchaseText } from './purchase-diagnostics.js';
 
 const pageHtml = `<!doctype html>
 <html lang="zh-Hant">
@@ -69,6 +70,9 @@ const pageHtml = `<!doctype html>
 .purchase-results-scroll{overflow-x:auto}.purchase-results-table{width:100%;min-width:850px;border-collapse:collapse;font-size:12px}.purchase-results-table th,.purchase-results-table td{padding:9px 10px;text-align:left;border-bottom:1px solid #26334b;vertical-align:top}.purchase-results-table th{color:#8d9db7;background:#0a1425;white-space:nowrap}.purchase-results-table td:nth-child(3){min-width:200px;max-width:320px}.purchase-results-table small{display:block;margin-top:5px;font-size:11px;overflow-wrap:anywhere}.purchase-results-table .pill{font-size:11px;padding:4px 7px;white-space:nowrap}
 ${esliteTableCss}
 ${funboxTableCss}
+.amazon-order-console{overflow:hidden;border:1px solid #29364d;border-radius:12px;background:#0d1625}.amazon-order-sheet{width:100%;table-layout:fixed;border-collapse:collapse;font-size:12px}.amazon-order-sheet caption,.amazon-visually-hidden{position:absolute;width:1px;height:1px;padding:0;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap}.amazon-task-col{width:48px}.amazon-state-col{width:105px}.amazon-progress-col{width:86px}.amazon-count-col{width:76px}.amazon-shipping-col{width:98px}.amazon-actions-col{width:222px}.amazon-order-sheet th,.amazon-order-sheet td{border:0;border-bottom:1px solid #233149;text-align:left;padding:11px 10px;vertical-align:middle;min-width:0}.amazon-order-sheet thead th{font-size:11px;letter-spacing:.04em;font-weight:500;color:#8395b0;background:#101c2d;padding-top:10px;padding-bottom:10px;white-space:nowrap}.amazon-order-sheet thead .muted{font-weight:400;font-size:10px;color:#677a97}.amazon-order-main{height:58px;transition:background .15s}.amazon-order-main:hover{background:#142238}.amazon-slot{display:inline-grid;place-items:center;width:25px;height:25px;border-radius:7px;background:#1a2d48;color:#9ec9ff;font-weight:700}.amazon-product-cell{overflow:hidden}.amazon-product-disclosure{padding:0!important;margin:0!important;border:0!important;background:none!important}.amazon-product-disclosure>summary{display:flex;align-items:center;gap:7px;cursor:pointer;padding:0!important;list-style:none;font-size:12px!important;min-width:0}.amazon-product-disclosure>summary::-webkit-details-marker{display:none}.amazon-product-disclosure>summary:before{content:'›';flex:0 0 10px;color:#7698c3;transition:transform .15s}.amazon-product-disclosure[open]>summary:before{transform:rotate(90deg)}.amazon-product-line{display:flex;align-items:center;gap:8px;min-width:0}.amazon-product-code{flex:none;color:#8bb9f5;font-size:11px;font-weight:600}.amazon-product-line strong{display:block;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-weight:500;color:#e3ebf7;min-width:0}.amazon-order-sheet .pill{display:inline-block;max-width:100%;box-sizing:border-box;font-size:11px;padding:4px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.amazon-numeric{font-variant-numeric:tabular-nums;white-space:nowrap;color:#dbe9fa}.amazon-order-sheet input[type=number]{width:100%;min-width:0;box-sizing:border-box;padding:5px 7px;margin:0;border:1px solid #2a3b56;border-radius:6px;background:#0b1423;font-size:12px;font-variant-numeric:tabular-nums}.amazon-order-sheet input[type=number]:hover{border-color:#46648b}.amazon-order-actions{display:flex;align-items:center;gap:6px;white-space:nowrap}.amazon-order-actions label{display:flex;align-items:center;flex:0 0 auto;gap:4px;margin:0;min-width:0;font-size:11px;color:#b9c8dd}.amazon-order-actions input[type=checkbox]{width:13px;min-width:0;height:13px;margin:0;accent-color:#6fa9fa}.amazon-order-actions button{flex:0 0 auto;min-width:0;padding:5px 8px;border:1px solid #344966;border-radius:6px;background:#1a2a40;color:#c8dcf5;font-size:11px;font-weight:500;line-height:18px}.amazon-order-actions button:hover{background:#294263;border-color:#5c82b2}.amazon-order-detail-row[hidden]{display:none}.amazon-order-detail-row td{padding:0;background:#0a1321}.amazon-order-drawer{padding:12px 16px 14px;border-left:2px solid #3c6598;margin:0 10px 10px}.amazon-detail-meta{color:#8da2bf;font-size:11px;margin-bottom:9px}.amazon-url-field{display:flex;align-items:center;gap:10px;font-size:11px;color:#8da2bf}.amazon-url-field input[type=url]{flex:1;min-width:0;width:100%;box-sizing:border-box;padding:7px 9px;font-size:11px;border-radius:6px}.amazon-step-stream{margin:10px 0 0;padding:10px 12px;max-height:180px;font-size:11px;background:#08101c;border:0;border-radius:6px}.amazon-order-help{padding:9px 12px;font-size:11px;margin:0;color:#7489a7!important;line-height:1.5}.amazon-order-feedback{font-size:12px;color:#a5c9f8;padding:8px 12px;margin:0;border-top:1px solid #26364e}.amazon-order-feedback:empty{display:none}@media(max-width:950px){.amazon-task-col{width:40px}.amazon-state-col{width:90px}.amazon-progress-col{width:75px}.amazon-count-col{width:65px}.amazon-shipping-col{width:85px}.amazon-actions-col{width:207px}.amazon-order-sheet th,.amazon-order-sheet td{padding-left:7px;padding-right:7px}.amazon-order-sheet thead .muted{display:none}.amazon-product-code{display:none}}@media(max-width:700px){.amazon-order-sheet colgroup,.amazon-order-sheet thead{display:none}.amazon-order-sheet tbody{display:block}.amazon-order-main{display:grid;height:auto;grid-template-columns:32px minmax(0,1fr) 90px;align-items:center}.amazon-order-main>th,.amazon-order-main>td{border:0}.amazon-order-main>td:nth-child(4){grid-column:1/2;font-size:10px;padding-left:8px}.amazon-order-main>td:nth-child(5),.amazon-order-main>td:nth-child(6){display:block}.amazon-order-main>td:nth-child(5):before{content:'目標次數';font-size:10px;color:#8395b0}.amazon-order-main>td:nth-child(6):before{content:'運費上限 ¥';font-size:10px;color:#8395b0}.amazon-order-main>td:last-child{grid-column:2/4;justify-self:end}.amazon-order-sheet{display:block}.amazon-order-detail-row:not([hidden]){display:table;width:100%}.amazon-order-detail-row td{display:block}.amazon-product-line strong{font-size:11px}.amazon-url-field{display:block}.amazon-url-field input{margin-top:6px}}
+.amazon-live-logs{margin:12px 0 16px;border:1px solid #29364d;border-radius:10px;background:#0a1321;overflow:hidden}.amazon-live-log-toolbar{display:flex;align-items:center;gap:12px;padding:8px 12px;border-bottom:1px solid #233149;font-size:12px}.amazon-live-log-toolbar strong{color:#c6d9f3}.amazon-live-log-toolbar span{color:#7087a8;font-size:11px}.amazon-live-log-toolbar button{margin-left:auto;padding:4px 11px;font-size:11px;background:#192a41;border:1px solid #344966;border-radius:6px}.amazon-live-log-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr))}.amazon-live-log-column{min-width:0;border-right:1px solid #233149}.amazon-live-log-column:last-child{border:0}.amazon-live-log-column header{display:flex;justify-content:space-between;align-items:center;padding:8px 11px;font-size:11px;color:#8198b9}.amazon-live-log-column header strong{color:#9ec9ff}.amazon-live-log-column pre{margin:0;padding:0 11px 10px;max-height:150px;min-height:58px;background:transparent;border:0;border-radius:0;font-size:10px;line-height:1.8;white-space:pre-wrap;overflow-wrap:anywhere}@media(max-width:800px){.amazon-live-log-grid{grid-template-columns:1fr}.amazon-live-log-column{border-right:0;border-bottom:1px solid #233149}.amazon-live-log-toolbar span{font-size:10px}.amazon-live-log-column pre{max-height:110px;min-height:35px}}
+.amazon-evidence-links>div{padding:8px 0;border-bottom:1px solid #29364d;font-size:12px;line-height:1.9}.amazon-evidence-links strong{margin-right:10px}.amazon-evidence-links a{margin-right:8px;color:#87b9ff}
 </style>
 </head>
 <body>
@@ -113,7 +117,7 @@ ${funboxTableCss}
     <div class="section-kicker">私人搶購助手</div>
     <section class="card funbox-purchase-panel">
       <div class="card-heading"><div><h2>🔐 Funbox 多帳號同步下單</h2><p class="compact-copy">單品／合單各帳號自選｜獨立佇列｜優先關鍵字 → 其餘隨機｜最多三路並行</p></div><span id="auto-purchase-funbox-summary" class="pill">已關閉</span></div>
-      <div class="field"><button type="button" class="secondary small" onclick="addFunboxAccountCard()">＋新增帳號</button><button id="funbox-purchase-readiness-button" type="button" class="secondary small" onclick="checkPurchaseReadiness('funbox')">補貨前檢查</button><small class="muted">可新增 D～N；只有已啟用帳號會接任務。</small></div>
+      <div class="field"><button type="button" class="secondary small" onclick="addFunboxAccountCard()">＋新增帳號</button><button id="funbox-purchase-readiness-button" type="button" class="secondary small" onclick="checkPurchaseReadiness('funbox')">補貨前檢查</button><button id="funbox-clear-all-carts" type="button" class="secondary small" title="清空 FUNBOX 所有已設定帳號；忙碌、瀏覽器使用中與訂單待核對的帳號會跳過" onclick="purchaseAccountAction(this,'funbox',null,'clear-all-carts')">一鍵全清</button><small class="muted">可新增 D～N；只有已啟用帳號會接任務。</small></div>
       <div id="funbox-purchase-readiness" aria-live="polite"></div>
       ${funboxAccountTableHtml}
       <div id="funbox-account-list" class="funbox-account-list">
@@ -160,6 +164,28 @@ ${funboxTableCss}
       <details class="advanced-box"><summary>已掃描但排除的 APP 兌換商品</summary><p class="muted">只供稽核，證明監控有讀到；不會推播，也不會交給自動下單。</p><div id="funbox-excluded-products" class="product-list"></div></details>
     </section>
 
+    <div class="section-kicker">安全測試</div>
+    <details class="card fold test-flow">
+      <summary>模擬商品上架與推播 <span class="pill" style="color:#ffd166">測試專區</span></summary>
+      <div class="compact-copy">不會在真實官網下單；用來驗證「上架 → 掃描 → 通知 → 測試結帳」完整流程。</div>
+      <div class="row" id="funbox-sandbox-summary"></div>
+      <p id="funbox-sandbox-last" class="muted"></p>
+      <div class="row">
+        <button id="funbox-sandbox-monitor-button" onclick="toggleFunboxSandboxMonitoring()">讀取中</button>
+        <a class="button-link gold" href="/funbox-sandbox/control" target="_blank" rel="noopener noreferrer">開啟測試上架頁面</a>
+        <button class="secondary" onclick="action('/scan-funbox-sandbox')">立即掃描測試頁</button>
+        <button class="secondary" onclick="action('/test-funbox-product-notification')">測試正式商品資料推播</button>
+      </div>
+      <p id="test-flow-state" class="test-success">等待你啟動測試監控。</p>
+      <div id="funbox-sandbox-products" class="product-list" style="margin-top:16px"></div>
+      <details class="advanced-box"><summary>測試工具</summary><div class="row"><button class="secondary" onclick="resetFunboxSandboxMonitor()">重設測試基線</button><a class="page-url" href="/funbox-sandbox/collections/%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA" target="_blank" rel="noopener noreferrer">查看測試商店</a></div></details>
+    </details>
+
+    <details class="card fold notification-demo-card">
+      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
+      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・Funbox 官網</div><div class="notification-demo-body"><strong>🚨 Funbox 戰鬥陀螺上新！</strong><br>品名：BEYBLADE X UX-15 起始組<br>價格：NT$699<br>目前庫存：100 組<br>狀態：新品上架<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div>
+      <p class="notification-demo-note">庫存下降時會改成庫存提醒，並顯示目前可售數量與即將售罄提示。</p>
+    </details>
 
     <details class="card fold">
       <summary>Funbox 官網執行紀錄</summary><p class="muted">只顯示 Funbox 掃描、通知與錯誤。</p><pre id="funbox-logs">讀取中…</pre>
@@ -269,9 +295,10 @@ ${funboxTableCss}
       <div class="purchase-stack">
       <section class="card">
         <div class="card-heading"><div><h2>誠品帳號｜單品／合單</h2></div><span id="auto-purchase-eslite-summary" class="pill">已關閉</span></div>
-        <div class="eslite-account-toolbar"><div class="eslite-account-toolbar-copy"><strong id="eslite-account-count">帳號管理</strong><small>可持續新增；下單最多三路並行，其餘排隊。未設定帳號不啟動瀏覽器。</small></div><button id="eslite-purchase-readiness-button" type="button" class="secondary small" onclick="checkPurchaseReadiness('eslite')">補貨前檢查</button><button id="eslite-add-account" type="button" class="secondary" onclick="addEsliteAccountCard()">＋ 新增帳號</button></div>
+        <div class="eslite-account-toolbar"><div class="eslite-account-toolbar-copy"><strong id="eslite-account-count">帳號管理</strong><small>可持續新增；下單最多三路並行，其餘排隊。未設定帳號不啟動瀏覽器。</small></div><div class="eslite-toolbar-actions"><button id="eslite-clear-all-carts" type="button" class="secondary small" title="清空誠品所有已設定帳號；忙碌、瀏覽器使用中與訂單待核對的帳號會跳過" onclick="purchaseAccountAction(this,'eslite',null,'clear-all-carts')">一鍵全清</button><button id="eslite-purchase-readiness-button" type="button" class="secondary small" onclick="checkPurchaseReadiness('eslite')">補貨前檢查</button><button id="eslite-add-account" type="button" class="secondary" onclick="addEsliteAccountCard()">＋ 新增帳號</button></div></div>
         <div id="eslite-purchase-readiness" aria-live="polite"></div>
         ${esliteAccountTableHtml}
+        <details class="eslite-system-details"><summary>普通 Chrome 登入自動同步</summary><p>連接器：extensions/eslite-session-sync；只同步選定帳號，不自動解驗證。</p><button type="button" onclick="pairEsliteBrowser()">取得同步配對碼</button> <input id="eslite-sync-pair-code" type="password" readonly autocomplete="off" aria-label="誠品同步配對碼"><button type="button" onclick="navigator.clipboard.writeText(document.getElementById('eslite-sync-pair-code').value)">複製配對碼</button></details>
         <div class="funbox-account-grid" id="eslite-account-list">
           <form id="eslite-account-A-card" class="funbox-account eslite-account-card" data-slot="A" onsubmit="saveEsliteAccount(event,'A')"><div class="funbox-account-head"><span id="eslite-account-A-title" class="funbox-account-title">帳號 A｜尚未設定</span><div class="eslite-account-head-actions"><span id="eslite-account-A-status" class="pill">未設定</span><button type="button" class="secondary small eslite-login-action" onclick="testAutoPurchaseLogin('eslite','A')">開啟登入</button><button type="button" class="secondary small eslite-check-action" onclick="completeAutoPurchaseLogin('eslite','A')">檢查登入</button><button type="button" class="secondary small" onclick="toggleEsliteAccountCard('A')">設定</button></div></div><div class="eslite-account-body"><div class="field"><label><input id="eslite-account-A-enabled" type="checkbox" checked> 使用</label><input id="eslite-account-A-account" autocomplete="username" placeholder="誠品帳號（不更改可留空）"><input id="eslite-account-A-password" type="password" autocomplete="current-password" placeholder="密碼（不更改可留空）"><button type="submit">儲存</button><button type="button" class="danger" onclick="clearEsliteAccount('A')">清除</button></div><div class="funbox-payment-options"><label class="funbox-payment-choice"><input type="radio" name="eslite-account-A-payment" value="seven_cod" onchange="markAutoPurchaseDirty('eslite')"><span>7-11 貨到付款</span></label><label class="funbox-payment-choice"><input type="radio" name="eslite-account-A-payment" value="virtual_atm_home" onchange="markAutoPurchaseDirty('eslite')"><span>宅配轉帳／ATM</span></label></div></div><p id="eslite-account-A-meta" class="funbox-account-meta">登入狀態尚未驗證。</p></form>
           <form id="eslite-account-B-card" class="funbox-account eslite-account-card" data-slot="B" onsubmit="saveEsliteAccount(event,'B')" hidden><div class="funbox-account-head"><span id="eslite-account-B-title" class="funbox-account-title">帳號 B｜尚未設定</span><div class="eslite-account-head-actions"><span id="eslite-account-B-status" class="pill">未設定</span><button type="button" class="secondary small eslite-login-action" onclick="testAutoPurchaseLogin('eslite','B')">開啟登入</button><button type="button" class="secondary small eslite-check-action" onclick="completeAutoPurchaseLogin('eslite','B')">檢查登入</button><button type="button" class="secondary small" onclick="toggleEsliteAccountCard('B')">設定</button></div></div><div class="eslite-account-body"><div class="field"><label><input id="eslite-account-B-enabled" type="checkbox" checked> 使用</label><input id="eslite-account-B-account" autocomplete="username" placeholder="誠品帳號（可留空）"><input id="eslite-account-B-password" type="password" autocomplete="current-password" placeholder="密碼（可留空）"><button type="submit">儲存</button><button type="button" class="danger" onclick="clearEsliteAccount('B')">清除</button></div><div class="funbox-payment-options"><label class="funbox-payment-choice"><input type="radio" name="eslite-account-B-payment" value="seven_cod" onchange="markAutoPurchaseDirty('eslite')"><span>7-11 貨到付款</span></label><label class="funbox-payment-choice"><input type="radio" name="eslite-account-B-payment" value="virtual_atm_home" onchange="markAutoPurchaseDirty('eslite')"><span>宅配轉帳／ATM</span></label></div></div><p id="eslite-account-B-meta" class="funbox-account-meta">登入狀態尚未驗證。</p></form>
@@ -298,6 +325,12 @@ ${funboxTableCss}
     </details>
     <details class="card fold"><summary><span>私人下單紀錄</span><span id="auto-purchase-summary" class="pill">已關閉</span></summary><p class="compact-copy">購物失敗只會記錄在這裡與私人 Discord；不會中斷監控，也不會出現在公開頻道。</p><div id="auto-purchase-recent" class="muted purchase-console purchase-log-list">尚無紀錄。</div></details>
 
+    <details class="card fold notification-demo-card">
+      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
+      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・購物網站</div><div class="notification-demo-body"><strong>🔔 規格補貨｜UX-14 天蠍長矛</strong><br>購物網站：momo購物網<br>監控專區：墊腳石 TAKARA TOMY 專區<br>商品：BEYBLADE X 戰鬥陀螺 CX／BX／UX 系列<br>補貨款式：UX-14 天蠍長矛<br>前台可售：18 組<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div>
+      <div class="notification-demo" style="margin-top:14px"><div class="notification-demo-head">陀螺通知監控儀表・開賣倒數</div><div class="notification-demo-body"><strong>⏰ 距離開賣 60 分鐘｜momo Funbox BX-35</strong><br>購物網站：momo購物網<br>商品：momo Funbox BX-35<br>開賣時間：7/25 11:00<br>現在時間：10:00<br>剩餘時間：60 分鐘<br>商品頁：<span class="notification-demo-link">立即前往</span><br>--------------------------------------------------</div></div>
+      <p class="notification-demo-note">自訂暱稱會顯示在「監控專區」；購物網站名稱仍會另外保留，方便判斷來源。</p>
+    </details>
 
     <details class="card fold">
       <summary>購物網站執行紀錄（依網站分類）</summary><pre id="shopping-logs">讀取中…</pre>
@@ -331,6 +364,27 @@ ${funboxTableCss}
       </form>
       <p id="amazon-jp-summary" class="muted">讀取中…</p>
       <p id="amazon-jp-error" class="bad"></p>
+      <details class="advanced-box"><summary>突襲練習 · 日亞測試推播</summary>
+      <form class="amazon-jp-test-panel" onsubmit="testAmazonJpNotification(event)">
+        <strong>測試官方原價通知</strong>
+        <span class="muted">選擇品項後推送到日本拍賣 Discord，點通知會開啟真實 Amazon.co.jp 商品頁；這只是通知格式測試，不會查價或下單。</span>
+        <div class="amazon-jp-test-options" role="radiogroup" aria-label="測試品項">
+          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="B0HJ783F18" checked onchange="toggleAmazonJpTestFields()"><span>BX-52<small>ラスタードラグーン6-60LC｜¥2,300</small></span></label>
+          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="B0HJ75X3PN" onchange="toggleAmazonJpTestFields()"><span>BX-53<small>オールインワンセット｜¥7,480</small></span></label>
+          <label class="amazon-jp-test-choice"><input type="radio" name="amazon-jp-test-choice" value="custom" onchange="toggleAmazonJpTestFields()"><span>自訂日亞網址<small>填入你想測試的商品</small></span></label>
+        </div>
+        <div id="amazon-jp-test-custom" class="amazon-jp-test-custom" hidden>
+          <label class="wide">Amazon.co.jp 商品網址<input id="amazon-jp-test-url" type="url" placeholder="https://www.amazon.co.jp/dp/ASIN" autocomplete="off"></label>
+          <label class="wide">商品名稱<input id="amazon-jp-test-title" type="text" maxlength="180" placeholder="填入測試通知要顯示的名稱"></label>
+          <label>型號<input id="amazon-jp-test-code" type="text" maxlength="12" placeholder="例如 BX-52"></label>
+          <label>測試使用定價（JPY）<input id="amazon-jp-test-msrp" type="number" min="1" max="1000000" step="1" placeholder="例如 2300"></label>
+          <label>模擬日亞價格（JPY，可留空）<input id="amazon-jp-test-price" type="number" min="1" max="1000000" step="1" placeholder="留空＝測試使用定價"></label>
+          <p class="muted wide" style="margin:0">自訂商品若已在日亞資料庫，名稱、型號與定價可留空；未收錄者請自行填入。</p>
+        </div>
+        <button type="submit" class="secondary">推送所選測試通知</button>
+        <p id="amazon-jp-test-result" class="notice muted" role="status" aria-live="polite"></p>
+      </form>
+      </details>
       <details class="advanced-box"><summary>單品資料庫 · 新增與刪除</summary>
       <p class="compact-copy">貼入日亞商品網址，加入資料庫與直接追蹤。</p>
       <form class="field" onsubmit="addAmazonJpProduct(event)">
@@ -342,20 +396,30 @@ ${funboxTableCss}
     </section>
 
     <section class="card">
-      <div class="card-heading"><div><h2>⚡ 日亞三組商品頁雙線搶購</h2><p class="compact-copy">A／B／C 各自追蹤一個 ASIN；每條都可選訊號觸發或五秒掃描＋訊號雙線。舊購物車搶購已移除。</p></div><span class="pill">最多三條</span></div>
-      <p class="compact-copy">每條各用獨立瀏覽器 Session，彼此不等待；核對 Amazon.co.jp 自營、官方原價與限購後才進入結帳。遇 429／驗證頁各自降速，不拖慢其他兩條。</p>
-      <div class="purchase-table-head" aria-hidden="true"><span>任務／商品</span><span>執行狀態</span><span>模式／進度</span><span>最近判定</span></div>
-      <div id="amazon-product-order-slots" class="purchase-task-list"></div>
+      <div class="card-heading"><div><h2>日亞自動下單</h2><p class="compact-copy">A／B／C 各自追蹤一個商品，獨立啟動與檢查，不互相等待。</p></div><span class="pill">3 組任務</span></div>
+      <p class="compact-copy">ABC 即時 LOG 顯示於上方；點品名可編輯網址。</p>
+      <div id="amazon-product-order-live-logs" class="amazon-live-logs"><div class="amazon-live-log-toolbar"><strong>即時 LOG</strong><span>僅本次執行保留 · 最新在上</span><button id="amazon-product-order-clear-log" type="button" class="secondary" title="清空 ABC LOG 與刷新次數，不清下單紀錄" onclick="clearAmazonProductOrderLogs()">清空</button></div><div id="amazon-live-log-content" class="amazon-live-log-grid"></div></div>
+      <div id="amazon-product-order-slots" class="amazon-order-console"></div>
+      <details class="fold"><summary>API＋插件雙路競速</summary>
+        <p class="compact-copy">兩路獨立刷新、各最多送一張；先成功會停止尚未送單的一路，已送出的重複單請自行取消。插件未連線時只有 API 執行。</p>
+        <div id="amazon-race-status" class="compact-copy"></div>
+        <p class="compact-copy">首次安裝：Chrome 擴充功能 → 開發人員模式 → 載入未封裝項目，選擇專案內 <code>extensions/amazon-race</code>。每個 Chrome 個人資料只連接一組任務，須確認是正確 Amazon 帳號。</p>
+        <label>配對任務 <select id="amazon-race-pair-slot"><option>A</option><option>B</option><option>C</option></select></label>
+        <button type="button" class="secondary" onclick="pairAmazonRace()">產生插件配對碼</button>
+        <input id="amazon-race-token" aria-label="插件配對碼" readonly hidden style="width:100%;margin-top:8px" onclick="this.select()">
+        <p id="amazon-race-feedback" class="compact-copy" role="status"></p>
+      </details>
       <details class="fold"><summary>永久訂單時間紀錄（重設不刪除）</summary>
-        <p class="compact-copy">每次符合條件並進入購買流程就保存一筆，包含失敗與結果待確認。最新在上，顯示最近 20 筆；完整 JSON 保留在下方資料夾。一般缺貨輪詢不建檔。點擊時間為動作開始，並非網站收單時間。</p>
+        <p class="compact-copy">每次符合條件並進入購買流程就保存一筆，包含失敗與结果待確認。最新在上，顯示最近 20 筆；完整 JSON 保留在下方資料夾。一般缺貨輪詢不建檔。送出時間是請求／動作開始，並非網站收單時間。</p>
         <p id="amazon-product-history-path" class="muted"></p><p id="amazon-product-history-error" class="bad"></p>
+        <div id="amazon-product-order-evidence-links" class="amazon-evidence-links"></div>
         <pre id="amazon-product-order-history">尚無永久紀錄（啟用本功能前的耗時無法回補）</pre>
       </details>
     </section>
 
     <details class="card fold"><summary>掃描時間、速度與黑名單</summary><form onsubmit="saveJapanSettings(event)"><div class="field"><span>監控時段</span><input id="japan-active-start" type="time" required><span>到</span><input id="japan-active-end" type="time" required></div><div class="field" style="margin-top:12px"><label>平時每 <input id="japan-interval" type="number" min="20" max="3600" step="1" required> 秒檢查一次</label><button type="submit">儲存設定</button></div><label class="funbox-rule-box black" style="margin-top:14px"><strong>⛔ 日本購物共用黑名單</strong><small>適用於 1999、日本樂天市場／Books、EDION 與 Amazon.co.jp。商品名稱命中任一行時仍保留掃描紀錄，但不推播。每行一個關鍵字。</small><textarea id="japan-exclude-keywords" oninput="japanDirty=true" placeholder="例如：&#10;ギアケース&#10;Gear Case&#10;デッキケース"></textarea></label></form><p class="compact-copy">開始與結束相同代表 24 小時。一般日本網站維持固定週期，不會因單次變化連續追索；同型號 24 小時內跨網站只推播一次。Amazon.co.jp 使用獨立排程，不受此規則影響。所有一般日本網站另有 BEYBLADE X 世代硬性篩選，舊世代不會進入通知基線。</p></details>
 
-
+    <details class="card fold notification-demo-card"><summary>通知測試與示範 <span class="demo-badge">測試工具</span></summary><div class="section-tools"><p class="compact-copy">需要時才使用，不影響正式掃描。</p><button class="secondary small" onclick="testJapanNotification()">測試 1999 UX-15 通知</button></div><div class="notification-demo"><div class="notification-demo-head">日拍追蹤</div><div class="notification-demo-body"><strong>🇯🇵 1999.co.jp｜新商品可購買</strong><br>商品：BEYBLADE X UX-15<br>價格：¥4,200（約 NT$920）<br>狀態：新商品可購買<br>購買：<span class="notification-demo-link">立即前往商品頁</span><br>--------------------------------------------------</div></div><p class="notification-demo-note">台幣採固定估算 ¥1 ≈ NT$0.22，四捨五入至十元；僅供快速判讀，不影響價格與庫存判斷。</p></details>
     <details class="card fold"><summary>日本拍賣執行紀錄</summary><pre id="japan-logs">讀取中…</pre></details>
   </main>
 
@@ -412,7 +476,7 @@ ${funboxTableCss}
             <select id="funbox-notification-mode" onchange="notificationDirty=true">
               <option value="discord">只傳 Discord</option><option value="line">只傳 LINE</option><option value="both">Discord + LINE 都傳</option><option value="auto">自動選擇可用平台</option>
             </select>
-            <small>新品與庫存變化送到公開情報頻道。</small>
+            <small>新品、庫存變化與沙盒測試送到公開情報頻道。</small>
           </label>
           <label class="channel-choice"><strong>🏬 公開｜購物網站</strong>
             <select id="shopping-notification-mode" onchange="notificationDirty=true">
@@ -456,6 +520,12 @@ ${funboxTableCss}
       <div id="self-check-body" hidden><div id="self-check-list"></div></div>
     </section>
 
+    <details class="card fold notification-demo-card">
+      <summary>通知示範 <span class="demo-badge">唯讀預覽，不會真的推播</span></summary>
+      <div class="notification-demo"><div class="notification-demo-head">陀螺通知監控儀表・系統狀態</div><div class="notification-demo-body"><strong>🟢 今日監控開始</strong><br>Funbox 官網：09:00～19:00<br>購物網站：09:00～22:00<br>通知服務：Discord + LINE<br>--------------------------------------------------</div></div>
+      <p class="notification-demo-note">此區只示範排版；不提供修改，真正設定仍由上方通知分流控制。</p>
+    </details>
+
     <details class="card fold">
       <summary>玩家備忘錄 <span class="muted">只存在這台電腦</span></summary>
       <p class="compact-copy">記下開賣時間、店家或抽選結果，不會傳到 Discord 或 LINE。</p>
@@ -465,6 +535,59 @@ ${funboxTableCss}
       </form>
     </details>
 
+    <section class="card simulation-lab">
+      <div class="card-heading"><div><h2>🧪 真實樣式推播測試</h2><p class="compact-copy">模擬補貨訊息，確認手機摘要、商品名稱、排版與頻道分流。</p></div><span class="pill">訊息會標示為測試</span></div>
+      <div class="simulation-controls">
+        <label>模擬通知種類
+          <select id="simulation-notification-type" onchange="toggleFunboxSimulationFields()">
+            <option value="funbox">Funbox 官網上架</option>
+            <option value="mmtoy">M.M小舖規格補貨</option>
+            <option value="shopping">一般購物網站補貨</option>
+            <option value="shopee">蝦皮 FUNBOX 旗艦館補貨（UX-21）</option>
+          </select>
+        </label>
+        <label>推送位置
+          <select id="simulation-notification-audience">
+            <option value="private">私人管理頻道（建議先測）</option>
+            <option value="public">公開頻道（M.M 會自動送到獨立頻道）</option>
+          </select>
+        </label>
+        <button id="simulation-notification-button" type="button" onclick="testSimulatedNotification()">傳送模擬補貨</button>
+      </div>
+      <details id="simulation-funbox-custom" class="simulation-custom" open>
+        <summary>Funbox 朋友互動內容</summary>
+        <div class="simulation-custom-grid">
+          <label class="wide">通知顯示品名
+            <input id="simulation-funbox-title" maxlength="120" value="BEYBLADE X 戰鬥陀螺 UX-16 時鐘幻象">
+          </label>
+          <label>顯示價格
+            <input id="simulation-funbox-price" maxlength="32" value="NT$350">
+          </label>
+          <label>顯示庫存
+            <input id="simulation-funbox-stock" type="number" min="0" max="99999" value="50">
+          </label>
+          <label class="wide">點擊後前往網址
+            <input id="simulation-funbox-target-url" type="url" value="https://www.youtube.com/watch?v=dMTy6C4UiQ4" placeholder="YouTube、圖片頁或其他 http/https 網址">
+          </label>
+          <label class="wide">通知圖片網址（選填）
+            <input id="simulation-funbox-image-url" type="url" placeholder="https://...jpg、png、gif 或 Discord 圖片網址">
+          </label>
+        </div>
+        <p class="simulation-custom-note">商品標題與「立即前往商品頁」都會開啟你填的網址；圖片只改通知縮圖。通知仍固定標示 🧪 測試，不會加入基線或啟動下單。</p>
+      </details>
+      <p class="simulation-warning">公開測試會真的出現在玩家可見頻道；M.M 小舖會送往「mm小舖獨立通知」，其他類型送往一般公開情報。</p>
+      <div class="notification-test">
+        <div class="notification-test-actions">
+          <div id="simulation-notification-progress" class="notification-progress" role="progressbar" aria-label="模擬推播進度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="simulation-notification-progress-bar" class="notification-progress-bar"></div></div>
+          <span id="simulation-notification-progress-text" class="muted">等待測試</span>
+        </div>
+        <div class="notification-test-status">
+          <strong id="simulation-notification-state">尚未傳送模擬通知。</strong>
+          <div id="simulation-notification-detail" class="notification-test-detail">送出成功後會顯示 Discord 實際頻道與訊息編號。</div>
+          <a id="simulation-notification-link" class="notification-test-link" target="_blank" rel="noopener noreferrer" hidden>直接開啟 Discord 訊息 ↗</a>
+        </div>
+      </div>
+    </section>
   </main>
 
 <script>
@@ -498,6 +621,20 @@ const openShoppingTargetManagers=new Set();
 const esliteVisibleSlots=new Set(['A']);
 ${esliteSlotClient}
 const esliteExpandedSlots=new Set();
+let esliteDisplayIdentities = {}, esliteIdentitiesReadAt = 0;
+async function refreshEsliteDisplayIdentities(){
+  if(Date.now()-esliteIdentitiesReadAt<60000)return;
+  esliteIdentitiesReadAt=Date.now();
+  try{const response=await fetch('/auto-purchase/eslite/display-identities',{method:'POST',headers:{'Content-Type':'application/json','x-local-identity-view':'1'},body:'{}'});
+    if(response.ok){const data=await response.json();esliteDisplayIdentities=Object.fromEntries(data.accounts.map(item=>[item.slot,item]));}
+  }catch{esliteIdentitiesReadAt=0;}
+}
+async function pairEsliteBrowser(){
+  const response=await fetch('/eslite-browser/pair',{method:'POST',headers:{'Content-Type':'application/json','x-local-session-import':'1'},body:'{}'});
+  const result=await response.json();if(!response.ok){document.querySelector('#shopping-result').textContent=result.error;return;}
+  document.getElementById('eslite-sync-pair-code').value=result.token;
+  document.querySelector('#shopping-result').textContent='配對碼已產生；貼入誠品連接器並選擇目前前端帳號。重新配對會讓舊配對碼失效。';
+}
 const funboxExpandedSlots=new Set();
 const funboxVisibleSlots=new Set(['A','B','C']);
 function toggleFunboxAccountCard(slot,force){const card=document.querySelector('#funbox-account-'+slot+'-card');if(!card)return;const expand=force===undefined?card.classList.contains('compact'):Boolean(force);card.classList.toggle('compact',!expand);if(expand)funboxExpandedSlots.add(slot);else funboxExpandedSlots.delete(slot);document.querySelector('#funbox-sheet-settings-'+slot)?.setAttribute('aria-expanded',String(expand));}
@@ -888,8 +1025,9 @@ function renderAutoPurchase(s){
     releaseButton.hidden=!runtimeAccount.purchaseHold;
     let queryButton=document.querySelector('#eslite-query-orders-'+slot);
     if(!queryButton){queryButton=document.createElement('button');queryButton.id='eslite-query-orders-'+slot;queryButton.type='button';queryButton.className='secondary small';queryButton.textContent='官方查單／同步已購';queryButton.onclick=()=>queryEsliteOrders(slot);meta.after(queryButton);}
-    queryButton.disabled=!account.ready||runtimeAccount.busy;
-    renderEsliteAccountSheet(a,slot,account,runtimeAccount,esliteVisibleSlots.has(slot));
+    queryButton.disabled=!account.ready||runtimeAccount.busy||Boolean(queryButton.dataset.running);
+    const fullIdentity=esliteDisplayIdentities[slot];
+    renderEsliteAccountSheet(fullIdentity?{...a,esliteMemberNames:{...a.esliteMemberNames,[slot]:fullIdentity.memberName}}:a,slot,fullIdentity?{...account,account:fullIdentity.account}:account,runtimeAccount,esliteVisibleSlots.has(slot));
     document.querySelector('#eslite-sheet-settings-'+slot).setAttribute('aria-expanded',String(esliteExpandedSlots.has(slot)));
     const verifyError=runtimeAccount.accountPreparationError||runtimeAccount.lastVerifyError||runtimeAccount.lastHeartbeatResult||'';
     meta.textContent=(!account.ready?'尚未儲存這組帳密。':apiState+recovery+hold+expiry+'｜'+heartbeat+(verified?'｜上次確認：'+fmt(verified):'')+(next?'｜下次：'+fmt(next):'')+(verifyError&&verifyError!=='尚未檢查'?'｜'+verifyError:''))+'｜策略：'+paymentLabel;
@@ -943,6 +1081,7 @@ function renderAutoPurchase(s){
   }).join('')+'</tbody></table></div>':'尚無紀錄。';
 }
 function renderSharedStatus(s){const n=s.notifications||{},f=s.funbox||{},shop=s.shoppingSites||{};document.querySelector('#shared-funbox-status').textContent=(!f.enabled?'目前停止':!f.withinActiveHours?'等待掃描時段':f.boostActive?'新品高速追蹤中':'監控中')+'｜'+(f.activeHours?f.activeHours.start+'～'+f.activeHours.end:'未設定時段')+'｜目前每 '+(f.effectiveIntervalSeconds||f.intervalSeconds||30)+' 秒｜正式基線 '+(f.seenCount||0)+'｜APP排除 '+(f.excludedCount||0)+'｜門檻提醒'+(f.stockChangeNotificationsEnabled?'開啟':'關閉');const activeShopping=(shop.targets||[]).filter(target=>target.enabled!==false);const pausedShopping=(shop.targets||[]).filter(target=>target.enabled===false);const onlineShopping=activeShopping.filter(target=>target.withinActiveHours);const customShopping=activeShopping.filter(target=>target.scheduleGroup==='custom').length;const reminderCount=(shop.saleReminders||[]).filter(reminder=>reminder.enabled!==false&&Date.parse(reminder.saleStartAt)>Date.now()).length;document.querySelector('#shared-shopping-status').textContent=!shop.enabled?'監控已停止':shop.scanning?'正在掃描':shop.boostActive?'變化熱點追蹤中':'監控正常運作';document.querySelector('#shared-shopping-schedule-status').textContent='專區：'+activeShopping.length+' 個監控｜'+pausedShopping.length+' 個暫停｜現在運作 '+onlineShopping.length+' 個';document.querySelector('#shared-shopping-speed-status').textContent='排程：共用 '+(shop.activeHours?shop.activeHours.start+'～'+shop.activeHours.end:'未設定')+'｜自訂時段 '+customShopping+' 個｜平時 '+(shop.intervalSeconds||60)+' 秒／變化 3 秒';document.querySelector('#shared-shopping-reminder-status').textContent='提醒：庫存'+(shop.stockChangeNotificationsEnabled?'開啟':'關閉')+'｜開賣倒數 '+reminderCount+' 個｜Discord '+(n.shoppingReady?'正常':'未設定');document.querySelector('#shared-notification-status').textContent='Funbox：'+(n.funboxLabel||'未設定')+'｜購物網站：'+(n.shoppingLabel||'未設定');}
+function renderFunboxSandbox(s){const f=s.funboxSandbox||{};const activity=!f.enabled?'測試監控未開啟':f.scanning?'正在掃描':'測試監控已開啟';document.querySelector('#funbox-sandbox-summary').innerHTML='<span class="pill '+(f.enabled?'ok':'bad')+'">'+activity+'</span><span class="pill">每 '+(f.intervalSeconds||5)+' 秒</span><span class="pill">已上架 '+(f.publishedCount||0)+' 件</span><span class="pill">已通知 '+(f.seenCount||0)+' 件</span>';const x=f.lastScan;document.querySelector('#funbox-sandbox-last').textContent=(x?'上次掃描：'+fmt(x.completedAt)+'｜找到 '+x.checked+' 件｜新商品 '+(x.discovered||0)+' 件｜送出通知 '+(x.notified||0)+' 則':'尚未執行測試掃描。')+(f.nextScanAt?'｜下次：'+fmt(f.nextScanAt):'');const button=document.querySelector('#funbox-sandbox-monitor-button');button.textContent=f.enabled?'停止測試監控':'啟動測試監控';button.className=f.enabled?'danger':'good';const flow=document.querySelector('#test-flow-state');if(f.publishedCount>0&&f.seenCount>=f.publishedCount){flow.textContent='✓ 掃描成功，Discord 通知已送出。';flow.className='test-success ok';}else if(f.enabled&&f.publishedCount>0){flow.textContent='已發現上架商品，正在送出 Discord 通知…';flow.className='test-success';}else if(f.enabled){flow.textContent='測試監控已開啟。現在請打開上架頁面並模擬上架。';flow.className='test-success ok';}else{flow.textContent='等待你啟動測試監控。';flow.className='test-success';}const products=f.products||[];document.querySelector('#funbox-sandbox-products').innerHTML=products.map(product=>'<div class="product-row"><div><strong>'+esc(product.title)+'</strong><div class="product-meta">'+esc(product.sku)+'｜NT$'+Number(product.price||0).toLocaleString('zh-TW')+'｜庫存 '+product.stock+'</div></div><span class="pill '+(product.published?'ok':'')+'">'+(product.published?'已模擬上架':'未上架')+'</span></div>').join('');}
 function renderChannelLogs(s){if(!s)return;renderRegularState(s);if(!memoDirty)document.querySelector('#memo').value=s.note||'';document.querySelector('#regular-logs').textContent=(s.regularLogs||[]).join('\\n')||'尚無常態模式紀錄';document.querySelector('#hotspot-logs').textContent=(s.hotspotLogs||[]).join('\\n')||'尚無熱點加速紀錄';document.querySelector('#funbox-logs').textContent=(s.funboxLogs||[]).join('\\n')||'尚無官網監控紀錄';const grouped=s.shoppingSiteLogs||{};const preferred=['FUNBOX官網','蝦皮-FUNBOX','誠品線上','momo購物網','墊腳石','童無忌','森森文具','MM小舖-已停用','其他購物網站'];const keys=Object.keys(grouped).sort((a,b)=>{const ai=preferred.indexOf(a),bi=preferred.indexOf(b);return(ai<0?999:ai)-(bi<0?999:bi)||a.localeCompare(b,'zh-TW');});document.querySelector('#shopping-logs').textContent=keys.length?keys.map(key=>'【'+key+'】\\n'+(grouped[key]||[]).join('\\n')).join('\\n\\n'):((s.shoppingLogs||[]).join('\\n')||'尚無購物網站監控紀錄');}
 function renderJapan(s){const j=s.japanAuctions||{};if(!japanDirty){document.querySelector('#japan-active-start').value=j.activeHours&&j.activeHours.start||'00:00';document.querySelector('#japan-active-end').value=j.activeHours&&j.activeHours.end||'00:00';document.querySelector('#japan-interval').value=j.intervalSeconds||30;const blacklist=document.querySelector('#japan-exclude-keywords');if(document.activeElement!==blacklist)blacklist.value=(j.excludeKeywords||[]).join('\\n');}const targets=j.targets||[];const active=targets.filter(t=>t.enabled!==false);const state=document.querySelector('#japan-state');state.textContent=!j.enabled?'目前停止':!j.withinActiveHours?'等待掃描時段':j.scanning?'正在讀取日本網站':'監控已排程';state.className='pill '+(j.enabled&&j.withinActiveHours?'ok':'');document.querySelector('#japan-summary').innerHTML='<span class="pill '+(j.enabled?'ok':'bad')+'">'+active.length+' 個網站運作</span><span class="pill">平時 '+(j.intervalSeconds||30)+' 秒</span><span class="pill">黑名單 '+(j.excludeKeywords||[]).length+' 個</span><span class="pill '+(j.notificationReady?'ok':'bad')+'">日拍 Discord '+(j.notificationReady?'已連接':'未設定')+'</span>';const x=j.lastScan;const targetName=x&&(x.siteName||targets.find(target=>target.id===x.targetId)?.siteName);document.querySelector('#japan-last').textContent=x?'最近完成：'+(targetName||'日本網站')+'｜'+fmt(x.completedAt)+'｜'+(x.checkedProducts||0)+' 件｜排除 '+(x.excluded||0)+'｜新品 '+(x.discovered||0)+'｜補貨 '+(x.restocked||0)+'｜通知 '+(x.notified||0):'尚未完成日本網站掃描。';document.querySelector('#japan-error').textContent=(x&&x.errors||[]).join('｜');const button=document.querySelector('#japan-monitor-button');button.textContent=j.enabled?'停止日本拍賣監控':'啟動日本拍賣監控';button.className=j.enabled?'danger':'good';document.querySelector('#japan-target-list').innerHTML=targets.map((target,index)=>{const baseline=target.baselineProductCount??target.productCount??0;const cadence=target.scanning?'掃描中':target.backoffUntil?'讀取失敗，降速至 '+fmt(target.backoffUntil):target.boostActive?'熱點 '+target.effectiveIntervalSeconds+' 秒':'常態 '+target.effectiveIntervalSeconds+' 秒';return '<section class="japan-target-card '+(target.enabled===false?'paused':'')+'"><div class="shopping-site-name">'+esc(target.siteName)+'</div><h3>'+esc(target.name)+'</h3><a class="page-url" href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">'+esc(target.url)+'</a><div class="shopping-target-facts"><span class="shopping-target-fact">'+cadence+'</span><span class="shopping-target-fact">'+(target.initialized?baseline+' 件保留基線｜本輪讀取 '+(target.lastRawProductCount||0)+' 件｜排除 '+(target.excludedCount||0):'等待建立基線')+'</span><span class="shopping-target-fact">解析器：'+esc(target.sourceType)+'</span>'+(target.failureCount?'<span class="shopping-target-fact bad">連續失敗 '+target.failureCount+' 次</span>':'')+'</div>'+(target.lastError?'<p class="bad">最近錯誤：'+esc(target.lastError)+'</p>':'')+'<div class="japan-target-actions"><button class="'+(target.enabled===false?'good':'secondary')+' small" onclick="setJapanTargetEnabled('+index+','+(target.enabled===false)+')">'+(target.enabled===false?'恢復監控':'暫停監控')+'</button><button class="danger small" onclick="deleteJapanTarget('+index+')">刪除</button><a class="shopping-target-link" href="'+esc(target.url)+'" target="_blank" rel="noopener noreferrer">開啟網站 ↗</a></div></section>'}).join('');const shared=document.querySelector('#shared-japan-status');if(shared)shared.textContent=!j.enabled?'監控已停止':j.scanning?'正在掃描':active.length+' 個網站獨立運作｜平時 '+(j.intervalSeconds||30)+' 秒｜Discord '+(j.notificationReady?'正常':'未設定');}
 function renderAmazonJp(s){const a=s.japanAuctions&&s.japanAuctions.amazonJp||{};if(!amazonJpDirty){document.querySelector('#amazon-jp-enabled').checked=a.enabled!==false;document.querySelector('#amazon-jp-postal-code').value=a.postalCode||'100-0001';}const state=document.querySelector('#amazon-jp-state');state.textContent=a.enabled===false?'目前停止':a.scanning?'核對官方賣家與價格':a.cadenceMode==='recovery'?'阻擋後線性降速中':'線性浮動監控中';state.className='pill '+(a.enabled!==false&&!a.lastError?'ok':a.lastError?'bad':'');const parts=['目前 '+(a.effectiveIntervalSeconds||20)+' 秒','平時 15～20 秒／阻擋 40～60 秒','定價庫 '+(a.catalogCount||0)+' 件','定價前專線 '+(a.lastDedicatedCheckedCount||0)+' 件','品牌 ASIN '+(a.brandAsinCount||0)+' 件','手動資料庫 '+(a.manualProductCount||0)+' 件'];if(a.lastKnownCount!==undefined)parts.push('已知商品 '+(a.lastKnownCount||0)+' 件');if(a.lastDirectCheckedCount!==undefined)parts.push('本輪直查 '+(a.lastDirectCheckedCount||0)+' 件');if(a.lastExcludedCount!==undefined)parts.push('黑名單排除 '+(a.lastExcludedCount||0)+' 件');if(a.lastEligibleCount!==undefined)parts.push('目前合格 '+(a.lastEligibleCount||0)+' 件');if(a.lastScanAt)parts.push('最近 '+fmt(a.lastScanAt));if(a.failureCount)parts.push('連續失敗 '+a.failureCount+' 次');if(a.backoffUntil)parts.push('降速至 '+fmt(a.backoffUntil));else if(a.nextScanAt)parts.push('下次 '+fmt(a.nextScanAt));document.querySelector('#amazon-jp-summary').textContent=parts.join('｜');document.querySelector('#amazon-jp-error').textContent=a.lastError||'';document.querySelector('#amazon-jp-signals').innerHTML=(a.manualProducts||[]).map(item=>'<div class="product-row"><div class="product-main">'+(item.imageUrl?'<img class="product-thumb" src="'+esc(item.imageUrl)+'" alt="">':'')+'<div><a href="'+esc(item.productUrl||item.originalAmazonUrl)+'" target="_blank" rel="noopener noreferrer"><strong>'+(item.code?esc(item.code)+'｜':'')+esc(item.title||('ASIN '+item.asin))+'</strong></a><div class="product-meta">ASIN '+esc(item.asin)+'｜'+(item.catalogConfirmed?'官方定價庫已收錄'+(item.msrpYen?' ¥'+Number(item.msrpYen).toLocaleString('ja-JP'):''):'等待官方定價庫')+'</div><div class="product-meta">'+(item.source==='x_signal'?'來源 X 速報｜':'手動新增｜')+'已存入日亞單品資料庫｜仍需 Amazon.co.jp 賣家驗證</div></div></div><div class="japan-target-actions"><span class="pill">'+fmt(item.addedAt||item.updatedAt)+'</span><button class="danger small" data-asin="'+esc(item.asin)+'" onclick="deleteAmazonJpProduct(this.dataset.asin)">刪除</button></div></div>').join('');}
@@ -1005,51 +1144,50 @@ function renderAmazonProductOrderLegacy(s){
   }).join('\\n\\n')||'尚無永久紀錄（啟用本功能前的耗時無法回補）';
 }
 function markAmazonProductOrderDirty(slot){amazonProductOrderDirty[slot]=true;}
+async function pairAmazonRace(){const output=document.querySelector('#amazon-race-feedback');try{const r=await api('/amazon-race/pair',{slot:document.querySelector('#amazon-race-pair-slot').value});const input=document.querySelector('#amazon-race-token');input.value=r.token;input.hidden=false;output.textContent='將此碼貼到插件，選任務 '+r.slot+' 並確認登入帳號；配對碼不會寫入日誌。';}catch(error){output.textContent=error.message;}}
+function toggleAmazonOrderDetails(control,slot){const row=document.querySelector('#amazon-product-order-detail-'+slot);if(row)row.hidden=!control.open;localStorage.setItem('beyblade-amazon-step-log-'+slot,control.open?'1':'0');}
 function renderAmazonProductOrder(s){
-  const orders=s.japanAuctions&&s.japanAuctions.amazonJpProductOrders||[];
-  const scanner=s.japanAuctions&&s.japanAuctions.amazonJp||{};
+  const orders=s.japanAuctions?.amazonJpProductOrders||[];
+  const raceLabels={idle:'尚未執行',preparing:'結帳中',granted:'已授權送單',unknown:'待核對',ordered:'訂單成立',failed:'失敗',cancelled:'已取消'};
+  const raceStatus=document.querySelector('#amazon-race-status');
+  if(raceStatus)raceStatus.textContent=orders.map(a=>a.slot+'｜API：'+(a.race?.waveId?(raceLabels[a.race?.routes?.api?.state]||'原流程'):a.enabled?'原 API 運作中':'已停止')+'｜插件：'+(a.race?.connected?(raceLabels[a.race?.routes?.frontend?.state]||'已連線'):'尚未連線')+(a.race?.frontend?.error?'｜'+a.race.frontend.error:'')).join('　');
+  const scanner=s.japanAuctions?.amazonJp||{};
   const container=document.querySelector('#amazon-product-order-slots');
-  const labels={idle:'尚未啟用',ready:'登入已確認',waiting_signal:'等待補貨訊號',waiting_poll:'五秒雙線待命',queued:'已命中，準備驗證',purchase_limited:'帳號已達限購',ordering:'正在結帳',needs_review:'送單結果待確認',needs_login:'需要登入',completed:'本輪完成'};
-  const reasons={qualified:'條件符合',product_mismatch:'商品不符',purchase_limited:'帳號限購',seller_not_amazon:'非日亞自營',above_msrp:'高於定價',non_jpy_price:'非日圓價格',price_missing:'未讀到價格',msrp_not_found:'缺官方定價',not_purchasable:'目前不可購',page_not_found:'頁面不存在',product_unreadable:'頁面未完整載入',login_required:'需重新登入',rate_limited:'限流／驗證頁'};
-  const stepLabels={refresh_start:'開始刷新',product_evaluated:'條件檢查完成',buy_now_click:'點擊立即購買',add_cart_click:'加入購物車',proceed_checkout:'前往結帳',checkout_inspect:'檢查結帳頁',checkout_continue:'繼續結帳',submit_order:'送出訂單',submit_result:'確認結果',failure:'失敗'};
-  for(const slot of ['A','B','C']){
-    const a=orders.find(item=>item.slot===slot)||{slot};
-    let card=document.querySelector('#amazon-product-order-card-'+slot);
-    if(card&&amazonProductOrderDirty[slot])continue;
-    const x=a.lastSnapshot||{};
-    const cooling=a.backoffUntil&&Date.parse(a.backoffUntil)>Date.now();
-    const stateText=a.running?(a.phase==='ordering'?'正在結帳':a.phase==='inspecting'?'只讀檢查中':a.mode==='hybrid'?'五秒巡檢中（尚未下單）':'補貨訊號驗證中'):a.interactive?'等待登入完成':!a.enabled?'目前停止':cooling?'降速等待':labels[a.status]||'待命';
-    const parts=[a.mode==='hybrid'?'五秒＋訊號雙線':'補貨訊號觸發','成功 '+(a.completedCount||0)+'／'+(a.targetSuccessCount||1),'驗證 '+(a.refreshCount||0)+' 次'];
-    if(a.nextAttemptAt)parts.push('下次 '+fmt(a.nextAttemptAt));
-    if(cooling)parts.push('降速至 '+fmt(a.backoffUntil));
-    if(a.enabled&&scanner.enabled===false)parts.push(a.mode==='hybrid'?'一般掃描已停，剩五秒線':'一般掃描已停，無訊號來源');
-    if(x.asin)parts.push('ASIN '+x.asin);
-    if(x.priceYen)parts.push('¥'+Number(x.priceYen).toLocaleString('ja-JP'));
-    if(x.evaluation)parts.push(reasons[x.evaluation]||x.evaluation);
-    if(a.lastSignalF5LatencyMs!==undefined)parts.push('訊號至刷新 '+a.lastSignalF5LatencyMs+'ms');
-    const steps=(a.stepLog||[]).slice(-8).reverse().map(step=>fmt(step.at)+'｜+'+(step.elapsedMs||0)+'ms｜'+(stepLabels[step.name]||step.name)+(step.result?'｜'+(reasons[step.result]||step.result):'')+(step.error?'｜'+step.error:'')).join('\\n')||'尚無紀錄';
-    const existingStepLog=card&&card.querySelector('details.purchase-task-log');
-    const stepsOpen=existingStepLog?existingStepLog.open:localStorage.getItem('beyblade-amazon-step-log-'+slot)==='1';
-    const targetAsin=x.asin||String(a.targetUrl||'').match(new RegExp('(?:dp|gp/product)/([A-Z0-9]{10})','i'))?.[1]||'';
-    const recentText=[x.priceYen?'¥'+Number(x.priceYen).toLocaleString('ja-JP'):'',x.evaluation?reasons[x.evaluation]||x.evaluation:'尚未檢查',a.lastSignalF5LatencyMs!==undefined?'訊號至刷新 '+a.lastSignalF5LatencyMs+'ms':''].filter(Boolean).join('｜');
-    const html='<section id="amazon-product-order-card-'+slot+'" class="purchase-task-row">'
-      +'<div class="purchase-task-summary">'
-      +'<div class="purchase-task-cell" data-label="任務／商品"><strong>任務 '+slot+'</strong><small>'+(targetAsin?'ASIN '+esc(targetAsin):'尚未設定商品')+'</small></div>'
-      +'<div class="purchase-task-cell" data-label="執行狀態"><span class="pill '+(a.enabled&&!a.lastError?'ok':a.lastError?'bad':'')+'">'+esc(stateText)+'</span><small>'+esc(a.lastError||'無錯誤')+'</small></div>'
-      +'<div class="purchase-task-cell" data-label="模式／進度"><strong>'+(a.mode==='hybrid'?'五秒＋訊號雙線':'補貨訊號觸發')+'</strong><small>成功 '+(a.completedCount||0)+'／'+(a.targetSuccessCount||1)+'｜驗證 '+(a.refreshCount||0)+' 次</small></div>'
-      +'<div class="purchase-task-cell" data-label="最近判定"><strong>'+esc(recentText)+'</strong><small>'+(a.nextAttemptAt?'下次 '+esc(fmt(a.nextAttemptAt)):cooling?'降速至 '+esc(fmt(a.backoffUntil)):'等待下一輪')+'</small></div>'
-      +'</div>'
-      +'<form class="purchase-task-editor" onsubmit="saveAmazonProductOrder(event,&quot;'+slot+'&quot;)"><div class="field"><label><input id="amazon-product-order-'+slot+'-enabled" type="checkbox" '+(a.enabled?'checked':'')+' onchange="markAmazonProductOrderDirty(&quot;'+slot+'&quot;)"> 啟用</label><select id="amazon-product-order-'+slot+'-mode" aria-label="任務 '+slot+' 模式" onchange="markAmazonProductOrderDirty(&quot;'+slot+'&quot;)"><option value="scan_signal" '+(a.mode!=='hybrid'?'selected':'')+'>補貨訊號</option><option value="hybrid" '+(a.mode==='hybrid'?'selected':'')+'>五秒＋訊號</option></select><label>成功 <input id="amazon-product-order-'+slot+'-target-count" type="number" min="1" max="99" value="'+(a.targetSuccessCount||1)+'" oninput="markAmazonProductOrderDirty(&quot;'+slot+'&quot;)"> 次</label></div><input id="amazon-product-order-'+slot+'-url" type="url" value="'+esc(a.targetUrl||'')+'" placeholder="https://www.amazon.co.jp/dp/ASIN" oninput="markAmazonProductOrderDirty(&quot;'+slot+'&quot;)" required><div class="purchase-task-actions"><button type="submit">儲存</button><button type="button" class="secondary" onclick="openAmazonProductOrderLogin(&quot;'+slot+'&quot;)">登入</button><button type="button" class="secondary" onclick="completeAmazonProductOrderLogin(&quot;'+slot+'&quot;)">驗證</button><button type="button" class="secondary" onclick="scanAmazonProductOrder(&quot;'+slot+'&quot;)">只讀</button><button type="button" class="secondary" onclick="resetAmazonProductOrderProgress(&quot;'+slot+'&quot;)">重設</button></div></form>'
-      +'<p id="amazon-product-order-'+slot+'-result" class="purchase-task-message notice muted"></p>'
-      +'<details class="purchase-task-log fold" '+(stepsOpen?'open':'')+' ontoggle="localStorage.setItem(&quot;beyblade-amazon-step-log-'+slot+'&quot;,this.open?&quot;1&quot;:&quot;0&quot;)"><summary>最近步驟</summary><pre>'+esc(steps)+'</pre></details></section>';
-    if(card)card.outerHTML=html;else container.insertAdjacentHTML('beforeend',html);
+  const logs=document.querySelector('#amazon-live-log-content');
+  if(logs){const markup=['A','B','C'].map(slot=>{const a=orders.find(item=>item.slot===slot)||{};const rows=[...(a.purchaseSteps||[]).slice().reverse().map(step=>({...step,route:'API'})),...(a.race?.frontend?.steps||[]).slice().reverse().map(step=>({...step,route:'插件'}))];const text=rows.sort((a,b)=>(Date.parse(b.at)||0)-(Date.parse(a.at)||0)).slice(0,60).map(step=>step.step+'｜'+(step.at?new Date(step.at).toLocaleTimeString('zh-TW',{hour12:false})+'｜':'')+(a.race?.connected||a.race?.waveId?step.route+'｜':'')+step.page+'｜'+step.action+(step.orderId?' '+step.orderId:'')+'｜'+step.status).join('\\n');return'<section class="amazon-live-log-column"><header><strong>'+slot+'</strong><span>API '+Number(a.refreshCount||0)+(a.race?.connected?' · 插件 '+Number(a.race.frontend?.refreshCount||0):'')+' 次</span></header><pre id="amazon-live-log-'+slot+'">'+esc(text||'尚無 LOG')+'</pre></section>';}).join('');if(logs.amazonMarkup!==markup){logs.innerHTML=markup;logs.amazonMarkup=markup;}}
+  const labels={idle:'尚未啟動',ready:'已就緒',waiting_signal:'等待補貨訊號',waiting_poll:'等待補貨',queued:'準備下單',ordering:'正在結帳',needs_review:'交易待核對',needs_login:'需要登入',needs_verification:'需要人工驗證',completed:'本輪完成',purchase_limited:'帳號限購'};
+  const reasons={qualified:'符合購買條件',not_purchasable:'目前不可購',seller_not_amazon:'非日亞自營',above_msrp:'高於定價',login_required:'需要登入',verification_required:'需要人工驗證',purchase_limited:'帳號限購',price_missing:'價格待確認',product_unreadable:'頁面未完整載入'};
+  if(!['A','B','C'].some(slot=>amazonProductOrderDirty[slot])){
+    const tableMarkup='<table class="amazon-order-sheet"><caption>日亞自動下單任務</caption><colgroup><col class="amazon-task-col"><col><col class="amazon-state-col"><col class="amazon-progress-col"><col class="amazon-count-col"><col class="amazon-shipping-col"><col class="amazon-actions-col"></colgroup><thead><tr><th scope="col">任務</th><th scope="col">商品 <span class="muted">· 點品名編輯網址</span></th><th scope="col">狀態</th><th scope="col">成功／目標</th><th scope="col">目標次數</th><th scope="col">運費上限 ¥</th><th scope="col">操作</th></tr></thead>'+['A','B','C'].map(slot=>{
+      const a=orders.find(item=>item.slot===slot)||{slot};
+      const targetAsin=String(a.targetUrl||'').match(new RegExp('(?:dp|gp/product)/([A-Z0-9]{10})','i'))?.[1]?.toUpperCase()||'';
+      const x=a.lastSnapshot?.asin===targetAsin?a.lastSnapshot:{};
+      const product=a.targetProduct?.asin===targetAsin?a.targetProduct:{};
+      const title=product.title||x.title||(scanner.manualProducts||[]).find(item=>item.asin===targetAsin)?.title||'品名待辨識，按「檢查」更新';
+      const code=product.code||x.code||title.match(/(?:BX|UX|CX)[- ]?[0-9]+/i)?.[0]||'';
+      const shortTitle=title.replace(/^タカラトミー[（(]TAKARA TOMY[）)]\\s*/i,'').replace(/^BEYBLADE X\\s*/i,'');
+      const cooling=Date.parse(a.backoffUntil||'')>Date.now();
+      const legacyHold=a.status==='needs_review'&&['adding','cart_ready','buy_now'].includes(a.apiTransactionStatus);
+      const state=a.running?(a.phase==='ordering'?'正在結帳':a.phase==='maintenance'?'待機整理':'檢查中'):a.interactive?'等待登入完成':legacyHold?'尚未送單，待核對':cooling?'降速等待':labels[a.status]||'待命';
+      const decision=x.evaluation==='not_purchasable'&&x.diagnostic?.decision==='retail_contract_incomplete'?'自營加車欄位不完整，非判定售罄':reasons[x.evaluation]||x.evaluation;
+      const cadence=a.mode==='hybrid'?(a.pollIntervalSeconds||5)+' 秒＋補貨訊號':'補貨訊號';
+      const auxiliary=[({needs_login:'背景查單需登入（獨立狀態）',needs_verification:'背景查單待驗證（獨立狀態）',unavailable:'背景查單暫不可用（獨立狀態）'})[a.orderHistoryCheck?.status],({needs_login:'待機清車需登入（獨立狀態）',needs_verification:'待機清車待驗證（獨立狀態）'})[a.idleCartMaintenance?.status]].filter(Boolean).join('｜');
+      const open=localStorage.getItem('beyblade-amazon-step-log-'+slot)==='1';
+      const changed=' oninput="markAmazonProductOrderDirty(&quot;'+slot+'&quot;)" onchange="saveAmazonProductOrderFields(&quot;'+slot+'&quot;)"';
+      return '<tbody id="amazon-product-order-card-'+slot+'"><tr class="amazon-order-main"><th scope="row"><span class="amazon-slot">'+slot+'</span></th><td class="amazon-product-cell"><details class="amazon-product-disclosure" '+(open?'open':'')+' ontoggle="toggleAmazonOrderDetails(this,&quot;'+slot+'&quot;)"><summary title="'+esc(title)+'"><span class="amazon-product-line">'+(code?'<span class="amazon-product-code">'+esc(code)+'</span>':'')+'<strong id="amazon-product-order-'+slot+'-title">'+esc(shortTitle)+'</strong></span></summary></details></td>'
+        +'<td><span title="'+esc(a.lastError||decision||'尚未檢查')+'" class="pill '+(a.lastError?'bad':a.enabled?'ok':'')+'">'+esc(!a.enabled&&!a.running&&!a.interactive&&!legacyHold?'已停止':state)+'</span></td>'
+        +'<td class="amazon-numeric">'+Number(a.completedCount||0)+' <span class="muted">/ '+Number(a.targetSuccessCount||1)+'</span></td><td><input aria-label="任務 '+slot+' 成功次數" id="amazon-product-order-'+slot+'-target-count" type="number" min="1" max="99" value="'+(a.targetSuccessCount||1)+'"'+changed+'></td><td><input aria-label="任務 '+slot+' 運費上限" id="amazon-product-order-'+slot+'-max-shipping" type="number" min="0" max="10000" value="'+Number(a.maxShippingYen??500)+'"'+changed+'></td>'
+        +'<td><div class="amazon-order-actions"><label><input id="amazon-product-order-'+slot+'-enabled" type="checkbox" '+(a.enabled?'checked':'')+' onchange="toggleAmazonProductOrder(this,&quot;'+slot+'&quot;)"> 啟動</label><button type="button" class="secondary" aria-label="開啟任務 '+slot+' 專用視窗" title="開啟此任務的專用登入／驗證視窗，不送單" onclick="openAmazonProductOrder(&quot;'+slot+'&quot;)">開啟</button><button type="button" class="secondary" onclick="checkAmazonProductOrder(&quot;'+slot+'&quot;)">檢查</button><button type="button" class="secondary" onclick="resetAmazonProductOrderProgress(&quot;'+slot+'&quot;)">重設</button></div><span class="amazon-visually-hidden" id="amazon-product-order-'+slot+'-result" role="status">'+esc(typeof amazonProductOrderMessages==='undefined'?'':amazonProductOrderMessages[slot]||'')+'</span></td></tr>'
+        +'<tr id="amazon-product-order-detail-'+slot+'" class="amazon-order-detail-row" '+(open?'':'hidden')+'><td colspan="7"><div class="amazon-order-drawer"><div class="amazon-detail-meta">'+esc(targetAsin||'尚未設定商品')+' · '+esc((a.checkoutTransport==='browser'?'網頁':'API')+'｜'+cadence)+' · 檢查 '+Number(a.refreshCount||0)+' 次'+(Number.isFinite(x.diagnostic?.quoteMs)?' · 報價 '+x.diagnostic.quoteMs+'ms':'')+' · '+esc(decision||'尚未檢查')+'</div><label class="amazon-url-field">商品網址<input aria-label="任務 '+slot+' 商品網址" id="amazon-product-order-'+slot+'-url" type="url" value="'+esc(a.targetUrl||'')+'" placeholder="貼上日亞商品網址" required'+changed+'></label>'+(auxiliary?'<p class="muted amazon-auxiliary-status">'+esc(auxiliary)+'</p>':'')+(a.lastError?'<p class="bad">'+esc(a.lastError)+'</p>':'')+'</div></td></tr></tbody>';
+    }).join('')+'</table><p id="amazon-product-order-feedback" class="amazon-order-feedback" role="status">'+esc((typeof amazonLiveLogMessage==='undefined'?'':amazonLiveLogMessage)||(typeof amazonProductOrderMessages==='undefined'?'':Object.entries(amazonProductOrderMessages).filter(([,value])=>value).map(([slot,value])=>slot+'｜'+value).join('　')))+'</p><p class="muted amazon-order-help">修改設定會儲存並停止該任務，勾選啟動才開始。檢查不送單；重設只歸零進度，保留購物車及訂單。</p>';
+    if(container.amazonMarkup!==tableMarkup){container.innerHTML=tableMarkup;container.amazonMarkup=tableMarkup;}
   }
   const history=orders.find(item=>item.orderHistory)?.orderHistory||{};
   document.querySelector('#amazon-product-history-path').textContent=(history.directory||'')+'｜共 '+(history.total||0)+' 筆';
   document.querySelector('#amazon-product-history-error').textContent=history.error||'';
-  const historyLabels={ordered:'訂單成立',failed:'購買失敗',submitted_unconfirmed:'結果待確認',in_progress:'進行中',interrupted:'中斷待核對'};
-  const ms=value=>value===null||value===undefined?'未記錄':(value/1000).toFixed(3)+' 秒';
-  document.querySelector('#amazon-product-order-history').textContent=(history.recent||[]).slice(0,20).map(record=>{const t=record.timings||{};return[fmt(record.startedAt)+'｜任務 '+(record.slot||'A')+'｜'+(historyLabels[record.status]||record.status)+'｜'+(record.product?.code||record.product?.asin||'商品'),record.product?.title||'','訂單編號：'+(record.orderId||'未取得')+'｜刷新至成立：'+ms(t.refreshToConfirmedMs),'訊號至刷新：'+ms(t.signalToRefreshMs)+'｜刷新至符合：'+ms(t.refreshToQualifiedMs),'符合至購買：'+ms(t.qualifiedToPurchaseMs)+'｜購買至送單：'+ms(t.purchaseToSubmitMs),'送單至成立：'+ms(t.submitToConfirmedMs)+'｜成立至 DC：'+ms(t.confirmedToNotificationMs),record.error?'原因：'+record.error:'','紀錄檔：'+record.id+'.json'].filter(Boolean).join('\\n');}).join('\\n\\n')||'尚無永久紀錄（啟用本功能前的耗時無法回補）';
+  const evidenceLinks=document.querySelector('#amazon-product-order-evidence-links');
+  if(evidenceLinks)evidenceLinks.innerHTML=(history.recent||[]).filter(record=>record.evidence?.length).map(record=>'<div><strong>'+esc('任務 '+record.slot+' · '+(record.product?.code||record.product?.asin||'商品'))+'</strong> '+record.evidence.map(item=>{const base='/amazon-product-order/evidence/'+encodeURIComponent(record.id)+'/'+encodeURIComponent(item.id);const label={entry:'02 入口',response:'02 官方回應',failure:'02 失敗'}[item.kind]||'02 快照';return item.status==='saved'?'<a href="'+base+'.png" target="_blank" rel="noopener noreferrer">'+esc(label)+'</a> <a href="'+base+'.json" target="_blank" rel="noopener noreferrer">原因／HTTP</a>':esc(label+'：'+(item.status==='failed'?'截圖未完成 '+(item.captureError||''):'保存中'));}).join(' · ')+'</div>').join('');
+  document.querySelector('#amazon-product-order-history').textContent=(history.recent||[]).slice(0,20).map(record=>['任務 '+(record.slot||'A')+'｜'+(record.route==='frontend'?'插件｜':record.route==='api'?'API｜':'')+(record.product?.title||record.product?.asin||'商品')+'｜'+({ordered:'訂單成立',failed:'失敗',submitted_unconfirmed:'待核對',interrupted:'中斷待核對',in_progress:'進行中'}[record.status]||record.status),...(record.steps||[]).filter(step=>step.page).map(step=>step.step+'｜'+(step.at?new Date(step.at).toLocaleTimeString('zh-TW',{hour12:false})+'｜':'')+step.page+'｜'+step.action+(step.orderId?' '+step.orderId:'')+'｜'+step.status)].join('\\n')).join('\\n\\n')||'尚無永久紀錄';
 }
 function renderFacebookStatus(s){
     const activity=s.monitoringEnabled?(s.withinActiveHours?'FB 主監控已啟動':'主監控休息時段'):'FB 主監控已停止';
@@ -1083,12 +1221,16 @@ function renderJapanHealth(s){
     if(!target)return;
     const facts=card.querySelectorAll('.shopping-target-fact');
     if(facts[0]&&target.enabled===false)facts[0].textContent='已暫停，不掃描';
-    else if(facts[0]&&needsVerification(target))facts[0].textContent='需人工驗證'+(target.nextScanAt?'｜降速重試 '+fmt(target.nextScanAt):'');
+    else if(facts[0]&&needsVerification(target))facts[0].textContent=(target.sourceType==='edion'?'受限・背景等待':'需人工驗證')+(target.nextScanAt?'｜降速重試 '+fmt(target.nextScanAt):'');
     if(facts[1])facts[1].textContent=needsVerification(target)
       ? (target.baselineProductCount||0)+' 件保留基線（舊資料）｜本輪被驗證阻擋，無法確認庫存'
       : facts[1].textContent.replace('本輪讀取','上次成功讀取');
+    if(target.sourceType==='rakuten-item'&&target.singleProduct&&facts[1]){
+      const item=target.singleProduct;
+      facts[1].textContent=(target.lastError?'上次成功資料（本輪未確認）｜':'')+(item.available===true?'可購買':item.available===false?'售罄／不可購買':'狀態未確認')+'｜'+(item.price||'價格未確認')+'｜庫存 '+item.stock;
+    }
     const checked=document.createElement('p');
-    checked.className='compact-copy';
+    checked.className='compact-copy japan-target-health-details';
     checked.textContent=(needsVerification(target)?'上次完成紀錄：':'最近成功：')+fmt(target.lastScanAt)+'｜最近嘗試：'+fmt(target.lastAttemptAt);
     card.insertBefore(checked,card.querySelector('.japan-target-actions'));
   });
@@ -1097,26 +1239,28 @@ function renderEdionBrowser(s){
   if(!document.querySelector('#edion-browser-state')){
     const panel=document.createElement('details');panel.className='card fold';panel.open=true;
     panel.innerHTML='<summary>愛電王・普通 Chrome 連接器 <span id="edion-browser-state" class="pill">待連接</span></summary>'
-      +'<p class="compact-copy">普通 Chrome 專用背景分頁唯讀觀測；正常至少每 60 秒讀取。驗證時保留分頁、不重整，同次阻擋只提醒私人頻道一次；你完成驗證並重新讀到商品後自動恢復。Cookie 不離開 Chrome，不碰購物車或下單。</p>'
+      +'<p class="compact-copy">背景 GET 官方商品 HTML，不重整或切換你的網頁。受限自動等待 15／30／60 分鐘重查，不跳視窗、不要求你按確認。Cookie 不離開 Chrome；受限期間可能漏掉補貨。</p>'
       +'<p class="compact-copy">一次性安裝：Chrome 輸入 chrome://extensions → 開發人員模式 → 載入未封裝項目 → 選擇下方資料夾。</p><code id="edion-browser-directory"></code>'
       +'<p class="compact-copy">專案已改名為 beyblade-watcher；若擴充功能不見或出現載入錯誤，請重新載入下方新路徑，勿再選 facebook-beyblade-watcher。這不會解除官網的人機驗證。</p>'
       +'<button class="secondary small" type="button" onclick="copyEdionDirectory()">複製連接器資料夾路徑</button>'
       +'<div class="row" style="margin-top:12px"><button class="secondary small" onclick="pairEdionBrowser()">產生／複製配對碼</button></div>'
-      +'<p class="compact-copy">安裝後點 Chrome 工具列的「愛電王本機連接器」，貼入配對碼並按連接。請完成連接器自己的監控分頁內的驗證；另開分頁不代表監控恢復。</p>'
+      +'<p class="compact-copy">既有連接器需更新至 1.1.0。完成一次配對後保持 Chrome 開啟即可；只有本次新讀取的完整商品資料才更新庫存。</p>'
       +'<p id="edion-browser-message" class="notice muted"></p><input id="edion-browser-token" type="password" readonly hidden aria-label="愛電王本機配對碼">';
     document.querySelector('#tab-japan .page-title').after(panel);
   }
   const j=s.japanAuctions||{};const bridge=j.edionBrowser||{};
   const bridgeState=document.querySelector('#edion-browser-state');
-  bridgeState.textContent=!bridge.enabled?'隨監控暫停':bridge.connected?'Chrome 已連接':'等待 Chrome 連接（不會背景重試網站）';
+  bridgeState.textContent=!bridge.enabled?'隨監控暫停':bridge.connected?bridge.protocol===2?'背景連接正常':'等待連接器更新':'等待 Chrome 背景連接';
   bridgeState.className='pill '+(bridge.connected?'ok':'');
   document.querySelector('#edion-browser-directory').textContent=bridge.extensionDirectory||'';
   document.querySelectorAll('#japan-target-list .japan-target-card').forEach((card,index)=>{
     const target=(j.targets||[])[index];if(!target?.chromeBridge)return;
     const health=target.chromeBridge;const facts=card.querySelectorAll('.shopping-target-fact');
-    const labels={paused:'隨監控暫停',disconnected:'待連接普通 Chrome',waiting:'Chrome 已連接，等待商品觀測',ready:'普通 Chrome 觀測正常',verification_required:'需人工驗證（保留分頁、不重整）',unreadable:'尚未讀到商品，保留基線'};
-    if(facts[0])facts[0].textContent=(labels[health.state]||'等待觀測')+'｜正常至少 '+health.intervalSeconds+' 秒';
+    const labels={paused:'隨監控暫停',disconnected:'待背景連接',waiting:'等待新版背景連接器',ready:'背景資料讀取正常',auto_wait:'受限／讀取未完成・自動等待',stale:'資料未更新',verification_required:'受限・背景等待',unreadable:'讀取未完成・自動重查'};
+    if(facts[0])facts[0].textContent=(labels[health.state]||'等待背景讀取')+'｜下次 '+fmt(health.nextReloadAt);
     if(facts[1]&&health.state!=='ready')facts[1].textContent=(target.baselineProductCount||0)+' 件舊基線｜當前庫存未確認';
+    const checked=card.querySelector('.japan-target-health-details');
+    if(checked)checked.textContent='最新資料：'+fmt(health.lastDataAt)+'｜最近背景嘗試：'+fmt(health.lastFetchAttemptAt);
   });
 }
 async function copyEdionDirectory(){
@@ -1136,7 +1280,7 @@ async function pairEdionBrowser(){
 function renderActiveStatus(s){
   if(activeTab==='overview')renderOverview(s);
   else if(activeTab==='fb')renderFacebookStatus(s);
-  else if(activeTab==='funbox'){renderFunbox(s);renderAutoPurchase(s);}
+  else if(activeTab==='funbox'){renderFunbox(s);renderFunboxSandbox(s);renderAutoPurchase(s);}
   else if(activeTab==='shopping'){renderShopping(s);renderAutoPurchase(s);}
   else if(activeTab==='japan'){renderJapan(s);renderJapanHealth(s);renderEdionBrowser(s);renderAmazonJp(s);renderAmazonProductOrder(s);}
   else if(activeTab==='shared'){renderNotifications(s);renderSharedStatus(s);renderAutoPurchase(s);renderSelfCheck(s.lastSelfCheck);if(!memoDirty)document.querySelector('#memo').value=s.note||'';document.querySelector('#shared-japan-status').textContent=s.japanAuctions?.enabled?'監控已啟用':'已暫停';}
@@ -1157,6 +1301,7 @@ async function refresh(){
       const s=await response.json();
       if(view!==activeTab){refreshAgain=true;return;}
       currentStatus={...(currentStatus||{}),...s};
+      if(view==='shopping')await refreshEsliteDisplayIdentities();
       renderActiveStatus(currentStatus);
       void refreshPurchaseOrderStatuses(view==='funbox'?'funbox':view==='shopping'?'eslite':'',false);
       const connection=document.querySelector('#dashboard-connection');connection.textContent='● 控制台已連線 · '+new Date().toLocaleTimeString('zh-TW');connection.className='ok';
@@ -1218,13 +1363,54 @@ async function saveAmazonJpSettings(event){event.preventDefault();const saved=aw
 async function scanAmazonJp(){await run('正在核對 TAKARA TOMY 定價、日亞品牌頁與 Amazon.co.jp 賣家…',()=>api('/japan/amazon/scan'));}
 function toggleAmazonJpTestFields(){document.querySelector('#amazon-jp-test-custom').hidden=document.querySelector('input[name="amazon-jp-test-choice"]:checked')?.value!=='custom';}
 async function testAmazonJpNotification(event){event.preventDefault();const form=event.currentTarget;const button=form.querySelector('button[type="submit"]');const result=document.querySelector('#amazon-jp-test-result');const choice=document.querySelector('input[name="amazon-jp-test-choice"]:checked')?.value;const body={choice};if(choice==='custom'){body.url=document.querySelector('#amazon-jp-test-url').value.trim();body.title=document.querySelector('#amazon-jp-test-title').value.trim();body.code=document.querySelector('#amazon-jp-test-code').value.trim();body.msrpYen=document.querySelector('#amazon-jp-test-msrp').value;body.priceYen=document.querySelector('#amazon-jp-test-price').value;}button.disabled=true;result.className='notice muted';result.textContent='正在推送測試通知…';try{const sent=await api('/japan/amazon/test',body);result.className='notice ok';result.textContent=sent.message||'測試通知已送出。';}catch(error){result.className='notice bad';result.textContent=error.message;}finally{button.disabled=false;}}
-async function saveAmazonProductOrder(event,slot){event.preventDefault();const result=document.querySelector('#amazon-product-order-'+slot+'-result');result.textContent='正在儲存任務 '+slot+'…';try{const saved=await api('/japan/amazon-product-order/settings',{slot,enabled:document.querySelector('#amazon-product-order-'+slot+'-enabled').checked,mode:document.querySelector('#amazon-product-order-'+slot+'-mode').value,targetSuccessCount:Number(document.querySelector('#amazon-product-order-'+slot+'-target-count').value),targetUrl:document.querySelector('#amazon-product-order-'+slot+'-url').value});amazonProductOrderDirty[slot]=false;result.textContent=saved.message;await refresh();}catch(error){result.textContent=error.message;}}
-async function openAmazonProductOrderLogin(slot){await run('正在開啟日亞任務 '+slot+' 專用視窗…',()=>api('/japan/amazon-product-order/login/open',{slot}));}
-async function completeAmazonProductOrderLogin(slot){await run('正在檢查日亞任務 '+slot+' 登入…',()=>api('/japan/amazon-product-order/login/complete',{slot}));}
-async function scanAmazonProductOrder(slot){await run('正在只讀檢查日亞任務 '+slot+'…',()=>api('/japan/amazon-product-order/scan',{slot}));}
-async function resetAmazonProductOrderProgress(slot){const result=document.querySelector('#amazon-product-order-'+slot+'-result');result.textContent='正在重設任務 '+slot+' 進度…';try{const saved=await api('/japan/amazon-product-order/settings',{slot,enabled:document.querySelector('#amazon-product-order-'+slot+'-enabled').checked,mode:document.querySelector('#amazon-product-order-'+slot+'-mode').value,targetSuccessCount:Number(document.querySelector('#amazon-product-order-'+slot+'-target-count').value),targetUrl:document.querySelector('#amazon-product-order-'+slot+'-url').value,resetProgress:true});amazonProductOrderDirty[slot]=false;result.textContent=saved.message;await refresh();}catch(error){result.textContent=error.message;}}
+function amazonProductOrderSettings(slot){const saved=(currentStatus?.japanAuctions?.amazonJpProductOrders||[]).find(item=>item.slot===slot)||{};return{slot,enabled:document.querySelector('#amazon-product-order-'+slot+'-enabled').checked,mode:document.querySelector('#amazon-product-order-'+slot+'-mode')?.value||saved.mode||'hybrid',targetSuccessCount:Number(document.querySelector('#amazon-product-order-'+slot+'-target-count').value),targetUrl:document.querySelector('#amazon-product-order-'+slot+'-url').value,maxShippingYen:Number(document.querySelector('#amazon-product-order-'+slot+'-max-shipping').value),fastLane:saved.fastLane??true};}
+const amazonProductOrderBusy={},amazonProductOrderMessages={};
+let amazonLiveLogClearing=false,amazonLiveLogMessage='';
+async function clearAmazonProductOrderLogs(){if(amazonLiveLogClearing)return;amazonLiveLogClearing=true;const button=document.querySelector('#amazon-product-order-clear-log');button.disabled=true;try{const result=await api('/japan/amazon-product-order/clear-log',{});amazonLiveLogMessage=result.message;await refresh();document.querySelector('#amazon-product-order-feedback').textContent=amazonLiveLogMessage;}catch(error){amazonLiveLogMessage=error.message;document.querySelector('#amazon-product-order-feedback').textContent=amazonLiveLogMessage;}finally{amazonLiveLogClearing=false;document.querySelector('#amazon-product-order-clear-log').disabled=false;}}
+async function amazonProductOrderAction(slot,work){
+  if(amazonProductOrderBusy[slot])return;
+  amazonLiveLogMessage='';
+  const wasDirty=Boolean(amazonProductOrderDirty[slot]);
+  amazonProductOrderBusy[slot]=true;amazonProductOrderDirty[slot]=true;
+  document.querySelector('#amazon-product-order-card-'+slot).querySelectorAll('button,input').forEach(el=>el.disabled=true);
+  document.querySelector('#amazon-product-order-'+slot+'-result').textContent='處理中…';
+  const feedback=document.querySelector('#amazon-product-order-feedback');if(feedback)feedback.textContent=slot+'｜處理中…';
+  let success=false,message;
+  try{message=(await work()).message||'完成';success=true;amazonProductOrderDirty[slot]=false;await refresh();}
+  catch(error){message=error.message;}
+  finally{
+    amazonProductOrderMessages[slot]=message;amazonProductOrderBusy[slot]=false;amazonProductOrderDirty[slot]=success?false:wasDirty;
+    document.querySelector('#amazon-product-order-card-'+slot).querySelectorAll('button,input').forEach(el=>el.disabled=false);
+    document.querySelector('#amazon-product-order-'+slot+'-result').textContent=message;
+    const feedback=document.querySelector('#amazon-product-order-feedback');if(feedback)feedback.textContent=slot+'｜'+message;
+  }
+}
+async function toggleAmazonProductOrder(control,slot){
+  const payload=amazonProductOrderSettings(slot),previous=!control.checked;
+  await amazonProductOrderAction(slot,async()=>{try{return await api('/japan/amazon-product-order/settings',payload);}catch(error){control.checked=previous;throw error;}});
+}
+async function saveAmazonProductOrderFields(slot){
+  const card=document.querySelector('#amazon-product-order-card-'+slot);
+  for(const input of card.querySelectorAll('input'))if(!input.reportValidity())return;
+  const payload={...amazonProductOrderSettings(slot),enabled:false};
+  await amazonProductOrderAction(slot,async()=>{await api('/japan/amazon-product-order/settings',payload);return{message:'設定已儲存；勾選「啟動」開始。'};});
+}
+async function openAmazonProductOrder(slot){
+  if(amazonProductOrderDirty[slot]){document.querySelector('#amazon-product-order-'+slot+'-result').textContent='欄位尚未儲存成功，請先修正設定；本次未開啟視窗。';return;}
+  await amazonProductOrderAction(slot,()=>api('/japan/amazon-product-order/login/open',{slot}));
+}
+async function checkAmazonProductOrder(slot){
+  if(amazonProductOrderDirty[slot]){document.querySelector('#amazon-product-order-'+slot+'-result').textContent='欄位尚未儲存成功，請先修正設定；本次未檢查或送單。';return;}
+  await amazonProductOrderAction(slot,()=>api('/japan/amazon-product-order/scan',{slot,check:true}));
+}
+async function resetAmazonProductOrderProgress(slot){
+  const payload={...amazonProductOrderSettings(slot),enabled:false,resetProgress:true};
+  await amazonProductOrderAction(slot,()=>api('/japan/amazon-product-order/settings',payload));
+}
 async function addAmazonJpProduct(event){event.preventDefault();const input=document.querySelector('#amazon-jp-product-url');const button=document.querySelector('#amazon-jp-product-add');button.disabled=true;try{const saved=await run('正在加入日亞單品資料庫…',()=>api('/japan/amazon/products',{url:input.value}));if(saved)input.value='';}finally{button.disabled=false;}}
 async function deleteAmazonJpProduct(asin){if(!confirm('確定從日亞單品資料庫刪除 ASIN '+asin+'？刪除後會停止此商品的專屬直接監控。'))return;await run('正在刪除日亞單品…',()=>api('/japan/amazon/products/delete',{asin}));}
+async function toggleFunboxSandboxMonitoring(){const enabled=currentStatus&&currentStatus.funboxSandbox&&currentStatus.funboxSandbox.enabled;await run('更新沙盒監控狀態…',()=>api(enabled?'/funbox-sandbox/stop':'/funbox-sandbox/start'));}
+async function resetFunboxSandboxMonitor(){if(!confirm('確定清除沙盒監控的商品基線嗎？這不會影響正式官網或 FB 紀錄。'))return;await run('重設沙盒基線…',()=>api('/funbox-sandbox/reset-monitor'));}
 async function saveNotificationSettings(event){event.preventDefault();const state=document.querySelector('#notification-state');state.textContent='儲存中…';try{const saved=await api('/notifications',{funbox:document.querySelector('#funbox-notification-mode').value,shopping:document.querySelector('#shopping-notification-mode').value});notificationDirty=false;state.textContent=saved.message;await refresh();}catch(error){state.textContent=error.message;}}
 function parseFunboxPurchaseKeywords(value){return [...new Set(String(value||'').split(/\\r?\\n|,|，|、/).map(item=>item.trim()).filter(Boolean))];}
 function funboxAccountPaymentsPayload(){return Object.fromEntries(currentFunboxSlots().map(slot=>{const selected=document.querySelector('input[name="funbox-account-'+slot+'-payment"]:checked');return[slot,selected?selected.value:'virtual_atm_home'];}));}
@@ -1276,10 +1462,12 @@ async function saveEsliteAccount(event,slot){event.preventDefault();const state=
 async function clearEsliteAccount(slot){const state=document.querySelector('#auto-purchase-eslite-state');if(!confirm('確定清除誠品帳號 '+slot+' 的加密帳密與啟用狀態？'))return;state.textContent='正在清除誠品帳號 '+slot+'…';try{const saved=await api('/auto-purchase/credentials',{platform:'eslite',accountSlot:slot,clear:true});if(slot!=='A'){esliteVisibleSlots.delete(slot);esliteExpandedSlots.delete(slot);}if(!['A','B','C'].includes(slot)){document.querySelector('#eslite-account-'+slot+'-card')?.remove();document.querySelector('#eslite-sheet-account-'+slot)?.remove();}state.textContent=saved.message;await refresh();}catch(error){state.textContent=error.message;}}
 async function testAutoPurchaseLogin(platform,accountSlot,manualOnly=false){const state=document.querySelector('#auto-purchase-'+platform+'-state');const name=platform==='funbox'?'Funbox 帳號 '+(accountSlot||'A'):'誠品帳號 '+(accountSlot||'A');state.textContent=manualOnly?'正在開啟專用手動登入視窗；不自動按登入…':platform==='eslite'?'正在確認會員 API；確定失效才自動登入…':'正在開啟 '+name+' 登入驗證視窗…';try{const result=await api('/auto-purchase/test-login',{platform,accountSlot,manualOnly});state.textContent=result.message;await refresh();}catch(error){state.textContent='登入測試失敗：'+error.message;}}
 async function completeAutoPurchaseLogin(platform,accountSlot){const state=document.querySelector('#auto-purchase-'+platform+'-state');const name=platform==='funbox'?'Funbox 帳號 '+(accountSlot||'A'):'誠品帳號 '+(accountSlot||'A');state.textContent='正在檢查 '+name+' 登入狀態…';try{const result=await api('/auto-purchase/complete-login',{platform,accountSlot});state.textContent=result.message;await refresh();}catch(error){state.textContent='登入檢查：'+error.message;}}
+async function purchaseAccountAction(control,platform,accountSlot,action){if(control.dataset.running||control.getAttribute('aria-disabled')==='true')return;const state=document.querySelector('#auto-purchase-'+platform+'-state');control.dataset.running='1';control.disabled=true;control.setAttribute('aria-busy','true');const prefix=accountSlot?accountSlot+'｜':'';state.textContent=prefix+(action==='clear-all-carts'?'所有已設定帳號購物車清空中…':'正在載入此帳號瀏覽器…');try{const result=await api('/auto-purchase/account-action',{platform,accountSlot,action});state.textContent=result.message;await refresh();}catch(error){state.textContent=prefix+error.message;}finally{delete control.dataset.running;control.disabled=false;control.removeAttribute('aria-busy');}}
 async function runCartMaintenance(){const state=document.querySelector('#auto-purchase-maintenance');state.textContent='正在檢查各平台登入狀態並清空舊購物車…';try{const result=await api('/auto-purchase/maintenance',{});state.textContent=result.message;await refresh();}catch(error){state.textContent='購物車保養失敗：'+error.message;}}
-async function resolveEsliteHold(slot){if(!confirm('請先到誠品會員訂單核對。確定帳號 '+slot+' 沒有成立這筆訂單，才可以解除保護。已確認未成立嗎？'))return;await run('解除誠品帳號保護…',()=>api('/auto-purchase/eslite/resolve-hold',{accountSlot:slot,confirmedNoOrder:true}));}
+async function resolveEsliteHold(slot,taskId){const pending=esliteSheetRecords(currentStatus?.autoPurchase||{}).rows.map(row=>row.item).filter(item=>item.accountSlot===slot&&item.status==='submitted_unconfirmed'&&item.taskId&&(!taskId||item.taskId===taskId));if(!pending.length){setEsliteQueryFeedback(slot,'這筆任務已更新，請重新整理後確認。');return;}const titles=pending.map(item=>item.product?.title||item.product?.id||item.taskId).join('、');if(!confirm('帳號 '+slot+'：'+titles+'。請確認你已在官方會員訂單核對，這 '+pending.length+' 筆確實沒有成立。確認後標記人工未成立並釋放這些任務的額度；不清車、不重送。是否確認？'))return;setEsliteQueryFeedback(slot,'正在保存人工確認結果…');try{const result=await api('/auto-purchase/eslite/resolve-hold',{accountSlot:slot,taskIds:pending.map(item=>item.taskId),confirmedNoOrder:true});setEsliteQueryFeedback(slot,result.message);await refresh();}catch(error){setEsliteQueryFeedback(slot,'確認未完成：'+error.message);}}
 async function resolveFunboxHold(slot){if(!confirm('請先到 FUNBOX 官方會員訂單核對。只有確認帳號 '+slot+' 沒有成立這筆訂單，才能解除保護。已確認未成立嗎？'))return;await run('解除 FUNBOX 帳號保護…',()=>api('/auto-purchase/funbox/resolve-hold',{accountSlot:slot,confirmedNoOrder:true}));}
-async function queryEsliteOrders(slot){await run('唯讀查詢官方訂單，不會加車或送單…',()=>api('/auto-purchase/eslite/resolve-hold',{accountSlot:slot,action:'query'}));}
+function setEsliteQueryFeedback(slot,text){const inline=document.querySelector('#eslite-query-result-'+slot);if(inline)inline.textContent=text;const state=document.querySelector('#auto-purchase-eslite-state');if(state)state.textContent=text;}
+async function queryEsliteOrders(slot){const button=document.querySelector('#eslite-query-orders-'+slot);if(button?.dataset.running)return;if(button){button.dataset.running='1';button.disabled=true;button.textContent='查詢中';}setEsliteQueryFeedback(slot,'正在查詢帳號 '+slot+' 的官方訂單；不清車、不送單…');try{const result=await api('/auto-purchase/eslite/resolve-hold',{accountSlot:slot,action:'query'});setEsliteQueryFeedback(slot,result.message);await refresh();}catch(error){setEsliteQueryFeedback(slot,'查單失敗：'+error.message);}finally{if(button){delete button.dataset.running;button.disabled=false;button.textContent='查單';}}}
 async function saveFunboxSettings(event){event.preventDefault();const saved=await run('儲存官網設定…',()=>api('/funbox/settings',{activeStart:document.querySelector('#funbox-active-start').value,activeEnd:document.querySelector('#funbox-active-end').value,intervalSeconds:Number(document.querySelector('#funbox-interval').value),stockChangeNotificationsEnabled:document.querySelector('#funbox-stock-change-notifications').checked}));if(saved){funboxSettingsDirty=false;await refresh();}}
 async function saveShoppingSettings(event){event.preventDefault();const saved=await run('儲存購物網站設定…',()=>api('/shopping/settings',{activeStart:document.querySelector('#shopping-active-start').value,activeEnd:document.querySelector('#shopping-active-end').value,intervalSeconds:Number(document.querySelector('#shopping-interval').value),stockChangeNotificationsEnabled:document.querySelector('#shopping-stock-change-notifications').checked,excludeKeywords:document.querySelector('#shopping-exclude-keywords').value}));if(saved){shoppingDirty=false;await refresh();}}
 async function saveJapanSettings(event){event.preventDefault();const saved=await run('儲存日本拍賣設定…',()=>api('/japan/settings',{activeStart:document.querySelector('#japan-active-start').value,activeEnd:document.querySelector('#japan-active-end').value,intervalSeconds:Number(document.querySelector('#japan-interval').value),excludeKeywords:document.querySelector('#japan-exclude-keywords').value}));if(saved){japanDirty=false;await refresh();}}
@@ -1319,6 +1507,7 @@ async function addKeyword(event,type){event.preventDefault();const input=documen
 async function deleteKeyword(type,index){const productKeywords=[...currentStatus.productKeywords];const salesKeywords=[...currentStatus.salesKeywords];const list=type==='productKeywords'?productKeywords:salesKeywords;const keyword=list[index];if(keyword===undefined||!confirm('確定移除命中詞「'+keyword+'」？'))return;list.splice(index,1);await saveKeywordLists(productKeywords,salesKeywords);}
 organizeDashboard();switchTab(activeTab);
 setInterval(()=>{if(!document.hidden)void refresh();},4000);
+setInterval(()=>{if(!document.hidden)tickEsliteTokenCountdowns();},1000);
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){void refresh();if(activeTab==='fb')void refreshFormPreview();}});
 </script></body></html>`;
 
@@ -1354,12 +1543,19 @@ export function createDashboard({
   onResolveFunboxHold = async () => { throw new Error('FUNBOX 解除保護處理器尚未設定'); },
   onVerifyPickupSetup = async () => { throw new Error('門市訂單核對尚未設定'); },
   onPrepareEsliteAccount = async () => { throw new Error('尚未設定帳號自動辨識'); },
+  onPurchaseAccountAction = async () => { throw new Error('帳號工具尚未設定'); },
   readOnly = false,
   onViewEsliteCredentials = () => { throw new Error('帳密查看尚未設定'); },
+  onImportEsliteBrowserSession = async () => { throw new Error('普通 Chrome 同步尚未設定'); },
+  onEsliteDisplayIdentities = () => ({ accounts: [] }),
   shopee,
   edionBrowser,
+  esliteBrowser,
+  amazonRace,
   onSaveAmazonJpProductOrder, onOpenAmazonJpProductOrderLogin,
   onCompleteAmazonJpProductOrderLogin, onScanAmazonJpProductOrder,
+  onClearAmazonJpProductOrderLogs = async () => { throw new Error('即時 LOG 清空尚未設定'); },
+  onReadAmazonJpOrderEvidence = async () => { throw new Error('快照尚未設定'); },
   port, funboxSandbox, formPreviewImageFile, formPreviewMetaFile, getStatus, onScan, onHotspotScan, onFunboxScan, onFunboxSandboxScan, onShoppingScan, onProbeEsliteExhibition = async () => ({ status: 'error', productCount: 0, checkedAt: new Date().toISOString(), error: '尚未設定策展檢查器' }), onJapanScan, onTestJapanNotification, onAmazonJpScan, onTestAmazonJpNotification, onTestFunboxProductNotification, onTestFunboxPurchaseNotification, onTestSimulatedNotification, onSaveFunboxSettings, onSaveShoppingSettings, onSaveJapanSettings, onSaveAmazonJpSettings, onAddAmazonJpProduct, onDeleteAmazonJpProduct, onSaveEsliteKeywords, onAddEsliteProduct, onDeleteEsliteProduct, onSaveNotificationSettings, onSaveAutoPurchaseSettings, onSyncAutoPurchaseLists = async () => { throw new Error('尚未設定名單同步處理器'); }, onSaveAutoPurchaseCredentials, onTestAutoPurchaseLogin, onCompleteAutoPurchaseLogin, onRunAutoPurchaseMaintenance, onResolveEsliteHold = async () => { throw new Error('解除保護處理器尚未設定'); }, onManualFunboxPurchase, onManualFunboxAssignments, onManualEslitePreflight, onSelfCheck, onTestNotification, onTestPostNotification, onTestLatestSogoPost, onStart, onStop, onStartFunbox, onStopFunbox, onStartShopping, onStopShopping, onStartJapan, onStopJapan, onStartFunboxSandbox, onStopFunboxSandbox, onResetFunboxSandboxMonitor,
   onOpenFacebookLogin, onOpenGoogleLogin, onOpenAdditionalGoogleLogin, onTestAutoFill, onTestMultiAutoFill, onPrewarmForm, onSaveAutoFillProfile, onGetAutoFillProfile, onSaveAISettings, onTestFormAI, onSaveNote, onSaveHotspot, onSaveSettings, onSaveKeywords, onAddPage, onRenamePage,
   onDetectPageName, onSetPageEnabled, onDeletePage, onAddShoppingTarget, onRenameShoppingTarget, onSetShoppingTargetEnabled, onSetShoppingTargetSchedule, onDeleteShoppingTarget, onSetJapanTargetEnabled, onDeleteJapanTarget,
@@ -1367,8 +1563,16 @@ export function createDashboard({
 }) {
   const server = http.createServer(async (request, response) => {
     try {
+      if(request.method === 'GET' && request.url.startsWith('/amazon-product-order/evidence/')){
+        const parts=new URL(request.url,'http://127.0.0.1').pathname.split('/');
+        const recordId=decodeURIComponent(parts[3]||''),fileName=decodeURIComponent(parts[4]||'');
+        if(parts.length!==5 || !/^\d{13}-[a-f0-9-]{36}$/.test(recordId) || !/^02-\d{2}-(entry|response|failure)\.(png|html|json)$/.test(fileName))return json(response,400,{error:'快照路徑不符'});
+        try{
+          const body=await onReadAmazonJpOrderEvidence(recordId,fileName);
+          response.writeHead(200,{'Content-Type':fileName.endsWith('.png')?'image/png':fileName.endsWith('.json')?'application/json; charset=utf-8':'text/html; charset=utf-8','Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':"sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"});response.end(body);return;
+        }catch(error){if(error.code==='ENOENT')return json(response,404,{error:'快照尚未產生或不存在'});throw error;}
+      }
       if (isArchivedFacebookRequest(request.url)) return json(response, 410, { error: 'Facebook 已封存：1010FB暫存', code: 'facebook_archived' });
-      if (/^\/(?:funbox-sandbox|scan-funbox-sandbox|test-(?!notification(?:$|\?)))/.test(request.url)) return json(response, 410, { error: '發佈版本不提供演練及示範推播入口' });
       if (readOnly && request.method !== 'GET') return json(response, 403, { error: '預覽模式不會更改監控或推送通知' });
       if (request.method === 'GET' && (request.url === '/api/product-catalog' || request.url === '/api/product-catalog?refresh=1')) {
         const catalog = await productCatalog.read({ force: request.url.endsWith('?refresh=1') });
@@ -1387,6 +1591,8 @@ export function createDashboard({
       }
       if (shopee && await shopee.handle(request, response)) return;
       if (edionBrowser && await edionBrowser.handle(request, response)) return;
+      if (esliteBrowser && await esliteBrowser.handle(request, response)) return;
+      if (amazonRace && await amazonRace.handle(request, response)) return;
       if (request.method === 'GET' && request.url === '/') {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
         response.end(pageHtml);
@@ -1489,6 +1695,7 @@ export function createDashboard({
       if (request.method === 'POST' && request.url === '/japan/amazon-product-order/login/open') return json(response, 200, await onOpenAmazonJpProductOrderLogin(await readJson(request)));
       if (request.method === 'POST' && request.url === '/japan/amazon-product-order/login/complete') return json(response, 200, await onCompleteAmazonJpProductOrderLogin(await readJson(request)));
       if (request.method === 'POST' && request.url === '/japan/amazon-product-order/scan') return json(response, 200, await onScanAmazonJpProductOrder(await readJson(request)));
+      if (request.method === 'POST' && request.url === '/japan/amazon-product-order/clear-log') return json(response, 200, await onClearAmazonJpProductOrderLogs());
       if (request.method === 'POST' && request.url === '/test-funbox-product-notification') {
         return json(response, 200, await onTestFunboxProductNotification());
       }
@@ -1561,11 +1768,40 @@ export function createDashboard({
           return json(response, 500, { error: '無法查看已存帳密' });
         }
       }
+      if (request.method === 'POST' && request.url === '/auto-purchase/eslite/display-identities') {
+        const host = request.headers.host;
+        if (![ `127.0.0.1:${server.address().port}`, `localhost:${server.address().port}` ].includes(host)
+          || request.headers.origin !== `http://${host}` || request.headers['x-local-identity-view'] !== '1') return json(response, 403, { error: '僅可由本機控制台查看帳號身分' });
+        return json(response, 200, await onEsliteDisplayIdentities());
+      }
+      if (request.method === 'POST' && request.url === '/auto-purchase/eslite/browser-session') {
+        const host = request.headers.host;
+        if (![ `127.0.0.1:${server.address().port}`, `localhost:${server.address().port}` ].includes(host)
+          || request.headers.origin !== `http://${host}` || request.headers['x-local-session-import'] !== '1') {
+          return json(response, 403, { error: '只接受本機登入同步，不接受外部網頁' });
+        }
+        try {
+          const body = await readJson(request);
+          if (!isEsliteAccountSlot(body.accountSlot)) return json(response, 400, { error: '帳號欄位格式不正確' });
+          return json(response, 200, await onImportEsliteBrowserSession(body));
+        } catch (error) {
+          // No body, cookie value, token or transport request headers in errors.
+          return json(response, 400, { error: safePurchaseText(error).replace(/https?:\/\/\S+/g, '[網址略去]') });
+        }
+      }
       if (request.method === 'POST' && request.url === '/auto-purchase/credentials') return json(response, 200, await onSaveAutoPurchaseCredentials(await readJson(request)));
       if (request.method === 'POST' && request.url === '/auto-purchase/eslite/prepare') return json(response, 200, await onPrepareEsliteAccount(await readJson(request)));
       if (request.method === 'POST' && request.url === '/auto-purchase/eslite/payment-probe') return json(response, 200, await onProbeEslitePayments(await readJson(request)));
       if (request.method === 'POST' && request.url === '/auto-purchase/readiness') return json(response, 200, await onCheckPurchaseReadiness(await readJson(request)));
       if (request.method === 'POST' && request.url === '/auto-purchase/test-login') return json(response, 200, await onTestAutoPurchaseLogin(await readJson(request)));
+      if (request.method === 'POST' && request.url === '/auto-purchase/account-action') {
+        const host = request.headers.host;
+        if (!/^127\.0\.0\.1:\d+$/.test(host || '') && !/^localhost:\d+$/.test(host || '')) return json(response, 403, { error: '只接受本機控制台操作' });
+        if (request.headers.origin !== `http://${host}`) return json(response, 403, { error: '只接受本機控制台操作' });
+        const body = await readJson(request);
+        if (!['open-browser', 'clear-all-carts'].includes(body.action)) return json(response, 400, { error: '只提供點帳號開啟瀏覽器或一鍵全清' });
+        return json(response, 200, await onPurchaseAccountAction(body));
+      }
       if (request.method === 'POST' && request.url === '/auto-purchase/complete-login') return json(response, 200, await onCompleteAutoPurchaseLogin(await readJson(request)));
       if (request.method === 'POST' && request.url === '/auto-purchase/maintenance') return json(response, 200, await onRunAutoPurchaseMaintenance());
       if (request.method === 'POST' && request.url === '/auto-purchase/eslite/resolve-hold') return json(response, 200, await onResolveEsliteHold(await readJson(request)));
@@ -1602,6 +1838,7 @@ export function createDashboard({
       json(response, 500, { error: error.message });
     }
   });
+  if (amazonRace) amazonRace.attach(server);
   server.listen(port, '127.0.0.1');
   return server;
 }

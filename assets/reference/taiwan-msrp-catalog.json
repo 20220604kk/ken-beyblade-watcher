@@ -1,0 +1,854 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-08-26T10:45:42.916Z",
+  "currency": "TWD",
+  "trustPolicy": {
+    "primary": "user_supplied_price_table_image",
+    "supplement": "beybladehub_community_reference",
+    "publicNotificationRequiresOfficialChannelConfirmation": true
+  },
+  "sources": [
+    {
+      "kind": "user_supplied_price_table_image",
+      "path": "user-supplied-reference-not-distributed",
+      "receivedAt": "2026-08-26",
+      "title": "戰鬥陀螺 X 系列原價格表（BX / CX / UX）"
+    },
+    {
+      "kind": "community_reference",
+      "url": "https://beybladehub.app/parts/combos",
+      "title": "BeybladeHub 完整陀螺",
+      "disclaimer": "非官方玩家資料站，僅用於補遺與交叉核對。"
+    }
+  ],
+  "summary": {
+    "manualEntries": 64,
+    "supplementEntries": 15,
+    "totalEntries": 79,
+    "hubDetailPagesChecked": 118,
+    "hubEntriesWithTaiwanPrice": 71
+  },
+  "products": [
+    {
+      "model": "BX-00",
+      "name": "復刻／聯名單品（圖片合併列）",
+      "msrpTwd": 350,
+      "ambiguousModel": true,
+      "catalogId": "manual-bx-00",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-00-bxg47",
+      "model": "BX-00",
+      "name": "BX-00 暴風天馬 3-70RA （品番 BXG-47）",
+      "msrpTwd": 595,
+      "msrpJpy": 2620,
+      "releaseDate": "2026-07-11",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-00-bxg47",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-01",
+      "name": "蒼龍神劍 3-60F",
+      "msrpTwd": 395,
+      "catalogId": "manual-bx-01",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-02",
+      "name": "惡魔紅鐮 4-60T",
+      "msrpTwd": 395,
+      "catalogId": "manual-bx-02",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-03",
+      "name": "魔導幻箭 4-80B",
+      "msrpTwd": 395,
+      "catalogId": "manual-bx-03",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-05",
+      "model": "BX-05",
+      "name": "BX-05 魔導幻箭",
+      "msrpTwd": 350,
+      "msrpJpy": 1400,
+      "releaseDate": "2023-07-15",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-05",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "catalogId": "BX-06",
+      "model": "BX-06",
+      "name": "BX-06 騎士重盾",
+      "msrpTwd": 350,
+      "msrpJpy": 1400,
+      "releaseDate": "2023-07-15",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-06",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-07",
+      "name": "極限激戰初始組",
+      "msrpTwd": 1795,
+      "catalogId": "manual-bx-07",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-09",
+      "name": "戰鬥陀螺 X 通行證",
+      "msrpTwd": 995,
+      "catalogId": "manual-bx-09",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-10",
+      "name": "極限衝擊戰鬥盤",
+      "msrpTwd": 850,
+      "catalogId": "manual-bx-10",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-11",
+      "name": "X 發射器握把",
+      "msrpTwd": 150,
+      "catalogId": "manual-bx-11",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-12",
+      "name": "3V3 對戰收納盒",
+      "msrpTwd": 250,
+      "catalogId": "manual-bx-12",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-14",
+      "name": "隨機強化組 Vol.01",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-14",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-15",
+      "model": "BX-15",
+      "name": "BX-15 雄獅獵爪",
+      "msrpTwd": 395,
+      "msrpJpy": 1650,
+      "releaseDate": "2023-09-30",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-15",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "catalogId": "BX-16",
+      "model": "BX-16",
+      "name": "BX-16 王蛇鞭尾選集",
+      "msrpTwd": 295,
+      "msrpJpy": 1400,
+      "releaseDate": "2023-10-07",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-16",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-18",
+      "name": "X 旋風發射器",
+      "msrpTwd": 250,
+      "catalogId": "manual-bx-18",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-19",
+      "model": "BX-19",
+      "name": "BX-19 戰犀號角",
+      "msrpTwd": 295,
+      "msrpJpy": 1400,
+      "releaseDate": "2023-11-02",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-19",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-20",
+      "name": "蒼龍利刃改造組",
+      "msrpTwd": 750,
+      "catalogId": "manual-bx-20",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-21",
+      "model": "BX-21",
+      "name": "BX-21 惡魔鎖鏈改造組",
+      "msrpTwd": 750,
+      "msrpJpy": 3960,
+      "releaseDate": "2023-11-02",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-21",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-23",
+      "name": "鳳凰飛翼 豪華組",
+      "msrpTwd": 495,
+      "catalogId": "manual-bx-23",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-24",
+      "model": "BX-24",
+      "name": "BX-24 隨機強化組 Vol.2",
+      "msrpTwd": 295,
+      "msrpJpy": 1400,
+      "releaseDate": "2023-12-27",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-24",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-25",
+      "name": "戰鬥陀螺 X 專業收納包",
+      "msrpTwd": 850,
+      "catalogId": "manual-bx-25",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-26",
+      "name": "獨角刺心",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-26",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-27",
+      "model": "BX-27",
+      "name": "BX-27 幻神護甲選集",
+      "msrpTwd": 295,
+      "msrpJpy": null,
+      "releaseDate": "2024-02-22",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-27",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-28",
+      "name": "旋風發射器 白",
+      "msrpTwd": 250,
+      "catalogId": "manual-bx-28",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-29",
+      "name": "X 發射器改造型握把（白藍）",
+      "msrpTwd": 195,
+      "catalogId": "manual-bx-29",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-30",
+      "name": "X 發射器改造型握把（黑紅）",
+      "msrpTwd": 195,
+      "catalogId": "manual-bx-30",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-31",
+      "name": "隨機強化組 Vol.03",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-31",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-33",
+      "name": "皓戰猛虎",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-33",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-34",
+      "name": "蒼穹龍騎士 豪華組",
+      "msrpTwd": 495,
+      "catalogId": "manual-bx-34",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-35",
+      "name": "隨機強化組 Vol.04",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-35",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-36",
+      "name": "巨鯨怒濤 隨機強化組",
+      "msrpTwd": 295,
+      "catalogId": "manual-bx-36",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-44",
+      "model": "BX-44",
+      "name": "BX-44 三角強襲",
+      "msrpTwd": 325,
+      "msrpJpy": null,
+      "releaseDate": "2025-06-28",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-44",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-45",
+      "name": "武士魂斬",
+      "msrpTwd": 325,
+      "catalogId": "manual-bx-45",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-46",
+      "name": "無限衝擊對戰組",
+      "msrpTwd": 2500,
+      "catalogId": "manual-bx-46",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-48",
+      "name": "隨機強化組 Vol.09",
+      "msrpTwd": 350,
+      "catalogId": "manual-bx-48",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "BX-49",
+      "name": "蒼龍突擊",
+      "msrpTwd": 495,
+      "catalogId": "manual-bx-49",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "BX-50",
+      "model": "BX-50",
+      "name": "BX-50 隨機強化組 Vol.11",
+      "msrpTwd": 350,
+      "msrpJpy": 1600,
+      "releaseDate": "2026-07-11",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/BX-50",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "BX-51",
+      "name": "旋風發射器 綠",
+      "msrpTwd": 250,
+      "catalogId": "manual-bx-51",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "CX-00-eva",
+      "model": "CX-00",
+      "name": "CX-00 福音戰士改造組",
+      "msrpTwd": 1395,
+      "msrpJpy": 7500,
+      "releaseDate": "2026-08-29",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/CX-00-eva",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "CX-01",
+      "name": "蒼龍勇氣",
+      "msrpTwd": 495,
+      "catalogId": "manual-cx-01",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-02",
+      "name": "魔導至尊",
+      "msrpTwd": 495,
+      "catalogId": "manual-cx-02",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-03",
+      "name": "英仙幽冥",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-03",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-04",
+      "name": "極限衝擊對戰組 C",
+      "msrpTwd": 1995,
+      "catalogId": "manual-cx-04",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-05",
+      "name": "隨機強化組 Vol.6",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-05",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-06",
+      "name": "極狐九尾 隨機強化組",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-06",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-07",
+      "name": "天馬爆擊",
+      "msrpTwd": 575,
+      "catalogId": "manual-cx-07",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-08",
+      "name": "隨機強化組 Vol.7",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-08",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-09",
+      "name": "焰神滅世",
+      "msrpTwd": 550,
+      "catalogId": "manual-cx-09",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-10",
+      "name": "銀狼狩獵",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-10",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-11",
+      "name": "帝王威能",
+      "msrpTwd": 995,
+      "catalogId": "manual-cx-11",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-12",
+      "name": "鳳凰閃焰",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-12",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-13",
+      "name": "龍王閃擊",
+      "msrpTwd": 495,
+      "catalogId": "manual-cx-13",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-14",
+      "name": "騎士堡壘",
+      "msrpTwd": 495,
+      "catalogId": "manual-cx-14",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-15",
+      "name": "邪神狂怒",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-15",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-16",
+      "name": "極限衝擊對戰組 C",
+      "msrpTwd": 1995,
+      "catalogId": "manual-cx-16",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-17",
+      "name": "隨機強化組 Vol.10",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-17",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "CX-18",
+      "name": "腕龍鞭打 隨機強化組",
+      "msrpTwd": 350,
+      "catalogId": "manual-cx-18",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-01",
+      "name": "蒼龍爆刃",
+      "msrpTwd": 395,
+      "catalogId": "manual-ux-01",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-02",
+      "name": "惡魔戰鎚",
+      "msrpTwd": 395,
+      "catalogId": "manual-ux-02",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-03",
+      "name": "魔導神杖",
+      "msrpTwd": 295,
+      "catalogId": "manual-ux-03",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-04",
+      "name": "極限衝擊對戰組 U",
+      "msrpTwd": 1995,
+      "catalogId": "manual-ux-04",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-05",
+      "name": "忍者闇影 隨機強化組",
+      "msrpTwd": 295,
+      "catalogId": "manual-ux-05",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-06",
+      "name": "雄獅巔峰",
+      "msrpTwd": 295,
+      "catalogId": "manual-ux-06",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-07",
+      "name": "鳳凰尾翼改造組",
+      "msrpTwd": 750,
+      "catalogId": "manual-ux-07",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-08",
+      "name": "霜輝銀狼",
+      "msrpTwd": 395,
+      "catalogId": "manual-ux-08",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-09",
+      "name": "武士星劍 豪華組",
+      "msrpTwd": 650,
+      "catalogId": "manual-ux-09",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-10",
+      "name": "騎士圓甲改造組",
+      "msrpTwd": 1250,
+      "catalogId": "manual-ux-10",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-11",
+      "name": "衝擊龍神 豪華組",
+      "msrpTwd": 550,
+      "catalogId": "manual-ux-11",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-12",
+      "name": "隨機強化組 Vol.05",
+      "msrpTwd": 295,
+      "catalogId": "manual-ux-12",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "UX-13",
+      "model": "UX-13",
+      "name": "UX-13 魔像奇岩",
+      "msrpTwd": 295,
+      "msrpJpy": 1400,
+      "releaseDate": "2025-01-25",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/UX-13",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "model": "UX-14",
+      "name": "天蠍長矛 0-70Z",
+      "msrpTwd": 495,
+      "catalogId": "manual-ux-14",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-15",
+      "name": "鮫鯊狂鱗改造組",
+      "msrpTwd": 795,
+      "catalogId": "manual-ux-15",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-16",
+      "name": "時鐘幻象 隨機強化組",
+      "msrpTwd": 295,
+      "catalogId": "manual-ux-16",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-17",
+      "name": "隕星龍騎士 3-70J",
+      "msrpTwd": 550,
+      "catalogId": "manual-ux-17",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-18",
+      "name": "隨機強化組 Vol.8",
+      "msrpTwd": 350,
+      "catalogId": "manual-ux-18",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "model": "UX-19",
+      "name": "子彈獅鷲 H",
+      "msrpTwd": 550,
+      "catalogId": "manual-ux-19",
+      "primarySource": "manual_image",
+      "sourceUrl": null,
+      "releaseDate": null,
+      "jan": null
+    },
+    {
+      "catalogId": "UX-20",
+      "model": "UX-20",
+      "name": "UX-20 榮耀戰神",
+      "msrpTwd": 595,
+      "msrpJpy": 2700,
+      "releaseDate": "2026-07-11",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/UX-20",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    },
+    {
+      "catalogId": "UX-21",
+      "model": "UX-21",
+      "name": "UX-21 惡魔幽冥改造組",
+      "msrpTwd": 895,
+      "msrpJpy": 4500,
+      "releaseDate": "2026-08-08",
+      "jan": null,
+      "sourceUrl": "https://beybladehub.app/parts/combos/UX-21",
+      "sourceKind": "community_reference",
+      "primarySource": "beybladehub"
+    }
+  ]
+}

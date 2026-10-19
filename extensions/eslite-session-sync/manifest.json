@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "陀螺監控・誠品登入同步",
+  "version": "1.0.0",
+  "description": "將正常登入的同帳號誠品憑證同步回本機。未包含登入、驗證或購買操作。",
+  "permissions": ["cookies", "storage", "alarms"],
+  "host_permissions": ["https://www.eslite.com/*", "http://127.0.0.1:3210/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_title": "誠品登入同步", "default_popup": "popup.html" }
+}

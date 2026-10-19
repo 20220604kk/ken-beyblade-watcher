@@ -5,6 +5,7 @@ const fail = (message, status = 'cart_conflict') => Object.assign(new Error(mess
 export async function fillEsliteBatchCart({ api, products, settings, readCart, timeoutForStep, checkpoint, now = Date.now }) {
   if (!products.length || new Set(products.map(p => p.id)).size !== products.length) throw fail('誠品合單任務為空或重複');
   const until = now() + (settings.batchBuildMs || 8000), expected = [], skipped = [];
+  let verifiedCount = -1;
   for (const product of products) {
     if (now() >= until) { skipped.push({ ...product, reason: 'batch_deferred' }); continue; }
     const quantity = Number(product.quantity);
@@ -12,6 +13,7 @@ export async function fillEsliteBatchCart({ api, products, settings, readCart, t
     checkpoint('開始加車', `${product.title || product.id} ×${quantity}；本帳號依序加車`, 'start');
     let response, body, uncertain = false;
     try {
+      verifiedCount = -1; // Any new write invalidates the previous cart receipt.
       response = await api.post('/api/v2/cart/items', { data: { product_guid: String(product.id), qty: quantity, crosssell_items: [] },
         timeout: timeoutForStep(Math.max(1, Math.min(5000, until - now()))) });
       try { body = await response.json(); } catch { uncertain = true; }
@@ -33,12 +35,15 @@ export async function fillEsliteBatchCart({ api, products, settings, readCart, t
     if (uncertain) {
       checkpoint('加車回應待核對', `${product.title || product.id}；只查車，不重加`, 'retry');
       assertEsliteBatchItems(await readCart('核對合單購物車'), expected);
+      verifiedCount = expected.length;
     }
     checkpoint('加車確認', `${product.title || product.id} ×${quantity}`, 'success');
   }
   if (!expected.length) throw fail('誠品本批沒有可購商品，未送單', 'stock_out');
   if (skipped.length && !settings.batchAllowPartial) throw fail('誠品合單不允許缺款，未送單');
-  assertEsliteBatchItems(await readCart('核對合單購物車'), expected);
+  // A recovery read after the final add already proved this exact whole cart.
+  // Reuse it only if NO subsequent write was attempted, including rejected adds.
+  if (verifiedCount !== expected.length) assertEsliteBatchItems(await readCart('核對合單購物車'), expected);
   checkpoint('購物車封箱', `${expected.length} 款已核對；排除 ${skipped.length} 款，下一步核對配送、紅利與金額`, 'success');
   return { products: expected, skippedProducts: skipped, quantity: expected.reduce((sum, p) => sum + p.quantity, 0) };
 }

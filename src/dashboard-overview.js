@@ -68,7 +68,7 @@ function organizeDashboard(){
   };
   foldSection('#auto-purchase-funbox-summary','自動下單 · 帳號、佇列與訂單');
   foldSection('#funbox-interval','掃描設定與商品基線');
-  foldSection('#amazon-product-order-slots','自動下單 · 三組商品頁雙線');
+  foldSection('#amazon-product-order-slots','日亞自動下單');
   foldSection('#shared-funbox-status','各平台詳細狀態');
   for(const [tab,items] of Object.entries({
     funbox:[['帳號與下單','#auto-purchase-funbox-summary'],['掃描設定','#funbox-interval'],['執行紀錄','#funbox-logs']],

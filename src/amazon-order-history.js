@@ -1,18 +1,20 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { amazonThreeSteps } from './amazon-three-steps.js';
+import { AmazonCheckoutEvidence } from './amazon-checkout-evidence.js';
 
 const FILE_PATTERN = /^\d{13}-[a-f0-9-]{36}\.json$/;
 const text = (value) => String(value || '').slice(0, 600);
 const safeError = (value) => text(value).replace(/https?:\/\/\S+/g, '[網址略去]');
 
 export function amazonOrderTimings(record) {
-  const at = (name) => record.steps?.find((step) => step.name === name)?.at;
+  const at = (name) => record.timingMarks?.[name] || (record.events || record.steps)?.find((step) => step.name === name)?.at;
   const elapsed = (start, end) => {
     const value = Date.parse(end) - Date.parse(start);
     return Number.isFinite(value) && value >= 0 ? value : null;
   };
-  const purchaseAt = at('buy_now_click') || at('add_cart_click');
+  const purchaseAt = at('api_add_cart') || at('api_cart_resume') || at('buy_now_click') || at('add_cart_click');
   const submitAt = at('submit_order');
   const confirmedAt = record.status === 'ordered' ? record.finishedAt : null;
   return {
@@ -22,6 +24,7 @@ export function amazonOrderTimings(record) {
     purchaseToSubmitMs: elapsed(purchaseAt, submitAt),
     submitToConfirmedMs: elapsed(submitAt, confirmedAt),
     refreshToConfirmedMs: elapsed(at('refresh_start'), confirmedAt),
+    refreshToSubmitMs: elapsed(at('refresh_start'), submitAt),
     confirmedToNotificationMs: record.notification?.status === 'sent'
       ? elapsed(confirmedAt, record.notification.at) : null
   };
@@ -36,6 +39,8 @@ export class AmazonOrderHistory {
     this.recent = [];
     this.total = 0;
     this.lastError = '';
+    this.recordQueues = new Map();
+    this.evidence = new AmazonCheckoutEvidence(this.directory, {saveRecord:record=>this.save(record)});
     this.ready = this.load();
   }
 
@@ -68,6 +73,13 @@ export class AmazonOrderHistory {
   }
 
   async save(record) {
+    const previous = this.recordQueues.get(record.id) || Promise.resolve();
+    const operation = previous.catch(()=>{}).then(()=>this.writeRecord(record));
+    this.recordQueues.set(record.id,operation);
+    try { await operation; } finally { if(this.recordQueues.get(record.id)===operation)this.recordQueues.delete(record.id); }
+  }
+
+  async writeRecord(record) {
     try {
       const file = path.join(this.directory, `${record.id}.json`);
       const temp = `${file}.tmp`;
@@ -79,15 +91,25 @@ export class AmazonOrderHistory {
     }
   }
 
-  async begin({ slot = 'A', mode, trigger, signalAt, scanStartedAt, taskStartedAt, snapshot, msrpYen, steps }) {
+  captureEvidence(record,kind,input) { this.evidence.enqueue(record,kind,input); }
+  readEvidence(recordId,fileName) { return this.evidence.read(recordId,fileName); }
+
+  async begin({ slot = 'A', mode, trigger, signalAt, scanStartedAt, taskStartedAt, snapshot, msrpYen, steps, compactSteps = false, route, raceId }) {
     await this.ready;
     const record = {
       schemaVersion: 1, id: `${Date.now()}-${randomUUID()}`, platform: 'amazon_jp_product',
       slot, mode, trigger, signalAt: signalAt || null, scanStartedAt, taskStartedAt: taskStartedAt || null,
       startedAt: new Date().toISOString(), status: 'in_progress',
+      ...(route === 'frontend' || route === 'api' ? { route, raceId: text(raceId) } : {}),
       product: { asin: text(snapshot.asin), code: text(snapshot.code), title: text(snapshot.title), priceYen: snapshot.priceYen, msrpYen },
       steps: (steps || []).map((step) => this.cleanStep(step))
     };
+    if (compactSteps) {
+      record.logFormat = 'three_category';
+      record.timingMarks = {};
+      for (const step of record.steps) this.captureTiming(record, step);
+      record.steps = amazonThreeSteps(record.steps);
+    }
     this.recent.unshift(record);
     this.recent = this.recent.slice(0, 20);
     this.total += 1;
@@ -100,6 +122,10 @@ export class AmazonOrderHistory {
     return {
       name: text(step.name), at: step.at, elapsedMs: step.elapsedMs,
       ...(step.step ? { step: step.step } : {}),
+      ...(Number.isFinite(step.durationMs) ? { durationMs: step.durationMs } : {}),
+      ...(Number.isFinite(step.retryCount) ? { retryCount: step.retryCount } : {}),
+      ...(Number.isFinite(step.retryDelayMs) ? { retryDelayMs: step.retryDelayMs } : {}),
+      ...(typeof step.parallel === 'boolean' ? { parallel: step.parallel } : {}),
       ...(step.result ? { result: text(step.result) } : {}),
       ...(step.status ? { status: text(step.status) } : {}),
       ...(step.orderId ? { orderId: text(step.orderId) } : {}),
@@ -108,13 +134,25 @@ export class AmazonOrderHistory {
   }
 
   async step(record, step) {
-    record.steps.push(this.cleanStep(step));
+    if (record.logFormat === 'three_category') {
+      this.captureTiming(record, step);
+      record.steps = amazonThreeSteps([...record.steps, this.cleanStep(step)]);
+    } else if (record.logFormat === 'three_step') {
+      record.events.push(this.cleanStep(step)); record.steps = amazonThreeSteps(record.events);
+    } else record.steps.push(this.cleanStep(step));
     await this.save(record);
+  }
+
+  captureTiming(record, step) {
+    if (['refresh_start', 'product_evaluated', 'buy_now_click', 'submit_order'].includes(step.name) && step.at) {
+      record.timingMarks[step.name] ||= step.at;
+    }
   }
 
   async finish(record, { status, orderId, error }) {
     if (record.finishedAt) return;
     Object.assign(record, { status, orderId: text(orderId), error: safeError(error), finishedAt: new Date().toISOString() });
+    if (record.logFormat === 'three_step') record.steps = amazonThreeSteps(record.events, { status, error: record.error });
     await this.save(record);
   }
 
@@ -124,7 +162,10 @@ export class AmazonOrderHistory {
   }
 
   status() {
-    return { total: this.total, error: this.lastError, directory: this.directory,
-      recent: this.recent.map((record) => ({ ...record, timings: amazonOrderTimings(record) })) };
+    return { total: this.total, error: this.lastError, directory: this.directory, evidencePending:this.evidence.pending,
+      recent: this.recent.map((record) => {
+        const { events, ...view } = record;
+        return { ...view, steps: amazonThreeSteps(events || record.steps), timings: amazonOrderTimings(record) };
+      }) };
   }
 }

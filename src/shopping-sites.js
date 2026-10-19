@@ -3,6 +3,8 @@ import fs from 'node:fs/promises';
 import { readAndReleaseResponse, releaseResponse } from './api-response.js';
 import { chromium, request as playwrightRequest } from 'playwright';
 import { monitoringRoute } from './monitoring-resources.js';
+import { purchasePolicy } from './purchase-rules.js';
+import { isTcsbSearchTarget, loadTcsbSearchProducts } from './tcsb-monitor.js';
 
 const PRODUCT_WORDS = /(?:BEYBLADE|戰鬥陀螺|陀螺)/i;
 const BEYBLADE_MODEL_WORDS = /\b(?:BXG|BX|UX|CX)-\d{2}\b/i;
@@ -261,6 +263,7 @@ export function shoppingSiteName(url) {
     if (hostname === 'momoshop.com.tw') return 'momo購物網';
     if (hostname === 'eslite.com') return '誠品線上';
     if (hostname === 'shop.tcsb.com.tw') return '墊腳石購物網';
+    if (hostname === 'tcsb.com.tw') return '墊腳石官網';
     if (hostname === 'twj.tw') return '童無忌';
     if (hostname.endsWith('shopee.tw')) return '蝦皮購物';
     if (hostname.endsWith('coupang.com')) return '酷澎';
@@ -1113,6 +1116,7 @@ export class ShoppingSiteMonitor {
     state,
     getTargets,
     getExcludeKeywords = () => [],
+    getEslitePurchaseSettings = () => ({ buyMode: 'whitelist', buyKeywords: [] }),
     notify,
     onPurchaseCandidate = null,
     onEsliteDiscoveryActivity = null,
@@ -1133,6 +1137,7 @@ export class ShoppingSiteMonitor {
     this.state = state;
     this.getTargets = getTargets;
     this.getExcludeKeywords = typeof getExcludeKeywords === 'function' ? getExcludeKeywords : () => [];
+    this.getEslitePurchaseSettings = getEslitePurchaseSettings;
     this.notify = notify;
     this.onPurchaseCandidate = typeof onPurchaseCandidate === 'function' ? onPurchaseCandidate : null;
     this.onEslitePurchaseObservation = typeof onEslitePurchaseObservation === 'function' ? onEslitePurchaseObservation : null;
@@ -1176,6 +1181,9 @@ export class ShoppingSiteMonitor {
     this.esliteVerificationJobs = new Map();
     this.esliteVerificationQueue = [];
     this.esliteVerificationActive = 0;
+    this.esliteBaselineVerificationActive = 0;
+    this.esliteBaselineSweeps = new Map();
+    this.esliteBaselineLastStarted = new Map();
     this.esliteVerificationFailures = new Map();
     this.esliteClosed = false;
     this.esliteApiSessionMtimeMs = 0;
@@ -1277,14 +1285,20 @@ export class ShoppingSiteMonitor {
     return task;
   }
 
-  queueEsliteVerification(target, product, source, onVerified = () => {}) {
+  queueEsliteVerification(target, product, source, onVerified = () => {}, { baselineSweep = null } = {}) {
     const key = `${target.id}:${product.id}`;
     if (this.esliteClosed) return Promise.resolve(null);
     if (this.esliteVerificationJobs.has(key)) return this.esliteVerificationJobs.get(key);
     let resolve;
     const task = new Promise((done) => { resolve = done; });
     this.esliteVerificationJobs.set(key, task);
-    this.esliteVerificationQueue.push({ key, target, product, source, resolve, onVerified });
+    const priority = baselineSweep ? 2 : String(source).startsWith('exhibition-page') ? 0 : 1;
+    const job = { key, target, product, source, resolve, onVerified, baselineSweep, priority };
+    // Exhibition > search > baseline for reads not yet started. Baseline workers only
+    // occupy two of the four slots, leaving room for the next exhibition hit.
+    const lowerPriorityIndex = this.esliteVerificationQueue.findIndex(item => item.priority > priority);
+    if (lowerPriorityIndex >= 0) this.esliteVerificationQueue.splice(lowerPriorityIndex, 0, job);
+    else this.esliteVerificationQueue.push(job);
     this._drainEsliteVerification();
     return task;
   }
@@ -1293,11 +1307,21 @@ export class ShoppingSiteMonitor {
     // Keep overload probes out of the discovery lanes; four concurrent reads,
     // not an unbounded burst of 23 requests against a busy server.
     while (!this.esliteClosed && this.esliteVerificationActive < 4 && this.esliteVerificationQueue.length) {
-      const job = this.esliteVerificationQueue.shift();
+      const index = this.esliteVerificationQueue.findIndex(job => !job.baselineSweep || this.esliteBaselineVerificationActive < 2);
+      if (index < 0) break;
+      const [job] = this.esliteVerificationQueue.splice(index, 1);
+      const currentTarget = this.getTargets().find(item => String(item.id) === String(job.target.id));
+      if (job.target.enabled === false || currentTarget?.enabled === false || !this.isEsliteMonitoringAllowed(job.target)
+        || (job.baselineSweep && Date.now() >= job.baselineSweep.deadline)) {
+        this.esliteVerificationJobs.delete(job.key);
+        job.resolve(null);
+        continue;
+      }
       this.esliteVerificationActive += 1;
+      if (job.baselineSweep) this.esliteBaselineVerificationActive += 1;
       void (async () => {
         try {
-          const result = await this.verifyEsliteProduct(job.product);
+          const result = await this.verifyEsliteProduct(job.product, { apiOnly: Boolean(job.baselineSweep) || this.esliteApiOnly });
           const currentTarget = this.getTargets().find((item) => String(item.id) === String(job.target.id));
           if (this.esliteClosed || job.target.enabled === false || currentTarget?.enabled === false || !this.isEsliteMonitoringAllowed(job.target)) return;
           const verified = result !== job.product && ['eslite-product-page', 'eslite-purchase-status'].includes(result?.availabilitySource);
@@ -1305,7 +1329,7 @@ export class ShoppingSiteMonitor {
           const confirmed = { ...result, verificationPending: false };
           job.onVerified(confirmed);
           this.applyImmediateEsliteObservations(job.target, [confirmed], {
-            source: `${job.source}->purchase-status`, authoritative: true
+            source: `${job.source}->purchase-status`, authoritative: true, baselineSweep: Boolean(job.baselineSweep)
           });
           job.resolve(confirmed);
         } catch (error) {
@@ -1314,10 +1338,86 @@ export class ShoppingSiteMonitor {
           job.resolve(null);
           this.esliteVerificationJobs.delete(job.key);
           this.esliteVerificationActive -= 1;
+          if (job.baselineSweep) this.esliteBaselineVerificationActive -= 1;
           this._drainEsliteVerification();
         }
       })();
     }
+  }
+
+  startEsliteBaselineSweep(target, triggerProduct) {
+    const key = String(target.id), now = Date.now();
+    const saved = this.state.data?.commerce?.shoppingSites?.targets?.[target.id];
+    if (this.esliteClosed || !saved?.initialized || target.enabled === false || !this.isEsliteMonitoringAllowed(target)
+      || this.esliteBaselineSweeps.has(key)
+      || now - (this.esliteBaselineLastStarted.get(key) ?? -Infinity) < 60_000) return false;
+    const settings = this.getEslitePurchaseSettings() || {};
+    const products = new Map();
+    for (const product of [...Object.values(saved.seen || {}), ...this.esliteManualProducts()]) {
+      const id = String(product?.id || '');
+      let canonicalUrl;
+      try { canonicalUrl = canonicalEsliteProductUrl(product?.url); } catch { continue; }
+      if (!/^\d{8,}$/.test(id) || productIdFromUrl(product.url || '') !== id
+        || !isTrackedBeybladeToy(product.title, product.url)
+        || shoppingProductExcludeMatch(product, this.getExcludeKeywords())) continue;
+      // Monitoring does not bypass the dispatcher: only configured purchase
+      // targets get the extra probes; account quotas still belong to dispatch.
+      const policy = purchasePolicy('eslite', product, settings);
+      if (!policy.eligible || id === String(triggerProduct.id)) continue;
+      products.set(id, { product: { ...(saved.seen[id] || product), url: canonicalUrl }, priority: policy.priority });
+    }
+    const candidates = [...products.values()].sort((left, right) => left.priority - right.priority).map(item => item.product);
+    if (!candidates.length) return false;
+    const sweep = { deadline: now + 30_000, cursor: 0 };
+    const stats = { triggerProductId: String(triggerProduct.id), startedAt: new Date(now).toISOString(),
+      status: 'checking', total: candidates.length, checked: 0, unknown: 0, newlyAvailable: 0, sellable: 0, skipped: 0 };
+    saved.esliteBaselineSweep = stats;
+    this.esliteBaselineLastStarted.set(key, now);
+    this.log(`誠品基線補查｜開始｜首款 ${triggerProduct.title}｜${candidates.length} 款｜背景 API，策展派單不等待`);
+    // Defer until the current observation has completed its dispatch/notice.
+    const task = Promise.resolve().then(async () => {
+      const worker = async () => {
+        while (!this.esliteClosed && Date.now() < sweep.deadline && target.enabled !== false
+          && this.getTargets().find(item => String(item.id) === key)?.enabled !== false
+          && this.isEsliteMonitoringAllowed(target) && sweep.cursor < candidates.length) {
+          const product = candidates[sweep.cursor++];
+          // Another lane may have confirmed this identity since the trigger.
+          const latest = this.state.data.commerce.shoppingSites.targets[target.id]?.seen?.[product.id];
+          if (Date.parse(latest?.lastObservationAt || '') >= now && latest?.verificationPending !== true
+            && latest?.status !== 'verification_pending' && typeof latest?.available === 'boolean'
+            && (isEsliteSourceBuySignal(latest) || String(latest.lastObservationSource || '').endsWith('->purchase-status'))) {
+            stats.skipped += 1;
+            continue;
+          }
+          const previousSellable = product.available === true || (product.variants || []).some(variant => variant.available === true);
+          const confirmed = await this.queueEsliteVerification(target, product, 'baseline-sweep', () => {}, { baselineSweep: sweep });
+          if (!confirmed) { stats.unknown += 1; continue; }
+          stats.checked += 1;
+          if (confirmed.available === true) {
+            stats.sellable += 1;
+            if (!previousSellable) stats.newlyAvailable += 1;
+          }
+        }
+      };
+      await Promise.all([worker(), worker()]);
+    }).catch(error => {
+      stats.status = 'error';
+      this.log(`誠品基線補查｜失敗｜${safeDiagnosticMessage(error)}`);
+    }).finally(() => {
+      stats.skipped += candidates.length - sweep.cursor;
+      if (stats.status !== 'error') stats.status = this.esliteClosed ? 'stopped'
+        : Date.now() >= sweep.deadline ? 'time_limit'
+        : target.enabled === false || this.getTargets().find(item => String(item.id) === key)?.enabled === false
+          || !this.isEsliteMonitoringAllowed(target) ? 'stopped' : 'completed';
+      stats.finishedAt = new Date().toISOString();
+      const current = this.state.data.commerce.shoppingSites.targets[target.id];
+      if (current) current.esliteBaselineSweep = stats;
+      this.esliteBaselineSweeps.delete(key);
+      this.log(`誠品基線補查｜${stats.status}｜確認 ${stats.checked}/${stats.total}｜新增可購 ${stats.newlyAvailable}｜結果不明 ${stats.unknown}｜略過 ${stats.skipped}`);
+      void this.state.save().catch(error => this.log(`誠品基線補查保存失敗：${safeDiagnosticMessage(error)}`));
+    });
+    this.esliteBaselineSweeps.set(key, task);
+    return true;
   }
 
   _backoffEsliteProduct(id) {
@@ -1350,7 +1450,8 @@ export class ShoppingSiteMonitor {
 
   applyImmediateEsliteObservations(target, items, {
     source = 'unknown',
-    authoritative = false
+    authoritative = false,
+    baselineSweep = false
   } = {}) {
     if (!Array.isArray(items) || !items.length) return { observed: 0, dispatched: 0 };
     this.state.data.commerce ||= {};
@@ -1362,6 +1463,7 @@ export class ShoppingSiteMonitor {
     const observedAt = new Date().toISOString();
     let observedCount = 0;
     let dispatched = 0;
+    let sweepTrigger = null;
 
     for (const item of items) {
       if (!item?.id || !/eslite\.com\/product\//i.test(item.url || '')) continue;
@@ -1426,6 +1528,7 @@ export class ShoppingSiteMonitor {
             freshObservationAt: observedAt
           };
           this.emitPurchaseCandidate(candidate);
+          sweepTrigger ||= item;
           const noticeStartedAt = Date.now();
           this.notifyInBackground(
             `購物網站：${candidate.siteName}\n監控專區：${target.name}\n發現可購買的戰鬥陀螺新品：${merged.title}${stockVariant ? `｜前台可售 ${stockVariant.stock} 組` : ''}\n${merged.url}`,
@@ -1454,6 +1557,7 @@ export class ShoppingSiteMonitor {
           freshObservationAt: observedAt
         };
         this.emitPurchaseCandidate(candidate);
+        sweepTrigger ||= item;
         const noticeStartedAt = Date.now();
         this.notifyInBackground(
           `購物網站：${candidate.siteName}\n監控專區：${target.name}\n商品恢復可購買：${merged.title}${stockVariant ? `｜前台可售 ${stockVariant.stock} 組` : ''}\n${merged.url}`,
@@ -1462,6 +1566,8 @@ export class ShoppingSiteMonitor {
         dispatched += 1;
       }
     }
+
+    if (sweepTrigger && !baselineSweep) this.startEsliteBaselineSweep(target, sweepTrigger);
 
     if (observedCount) {
       saved.lastImmediateObservationAt = observedAt;
@@ -2214,7 +2320,7 @@ export class ShoppingSiteMonitor {
     });
   }
 
-  async verifyEsliteProduct(product) {
+  async verifyEsliteProduct(product, { apiOnly = this.esliteApiOnly } = {}) {
     const productId = productIdFromUrl(product.url);
     if (Date.now() < Number(this.esliteProductBlockedUntil.get(productId) || 0)) return product;
     if (/^\d{8,}$/.test(productId)) {
@@ -2258,7 +2364,7 @@ export class ShoppingSiteMonitor {
         this.log(`誠品 purchase_status API 連線失敗｜${product.title}：${safeDiagnosticMessage(error)}；保留基線，不啟動瀏覽器。`);
       }
 
-      if (useBrowserFallback && this.esliteApiOnly) {
+      if (useBrowserFallback && apiOnly) {
         this._backoffEsliteProduct(productId);
         this.log(`誠品單品 API 無可信結果｜${product.title}：保留待確認狀態；API-only 不開啟商品頁。`);
         return product;
@@ -2451,8 +2557,8 @@ export class ShoppingSiteMonitor {
     const manualProductIds = new Set(manualProducts.map((product) => String(product.id)));
     const directlyVerified = new Map();
 
-    // 歷史基線只用於比對，不再逐筆輪詢。個別商品 API 只會由策展頁或
-    // 搜尋頁本輪實際出現的商品觸發，避免舊商品拖慢兩條發現線。
+    // 平時只驗證本輪策展／搜尋出現的商品；首款確認新品／補貨後，
+    // 由背景補查讀取已知購買目標，不等待整輪基線才派送第一款。
     mergeProducts([...knownProducts, ...manualProducts]);
     const verifySourceProducts = async (items, source) => {
       const eligible = items.filter((item) => item?.id && /eslite\.com\/product\//i.test(item.url || ''));
@@ -3126,6 +3232,8 @@ export class ShoppingSiteMonitor {
             products = await this.loadSenSenCollectionProducts(target);
           } else if (isTwjTarget(target)) {
             products = await this.loadTwjCollectionProducts(target);
+          } else if (isTcsbSearchTarget(target)) {
+            products = await loadTcsbSearchProducts(target, this.fetcher);
           } else if (isEsliteKeywordTarget(target)) {
             products = await this.loadEsliteKeywordProducts(target);
           } else if (isEsliteExhibitionUrl(target.url)) {
@@ -3529,6 +3637,15 @@ export class ShoppingSiteMonitor {
               }
             }
           }
+          // Background confirmation can finish while discovery/notifications
+          // await. Never overwrite that newer evidence with a merged old seed.
+          const latestTarget = storage.targets[target.id];
+          if (isEsliteKeywordTarget(target)) {
+            for (const [id, latest] of Object.entries(latestTarget?.seen || {})) {
+              if (latest.lastObservationAt && (!nextSeen[id]?.lastObservationAt
+                || Date.parse(latest.lastObservationAt) >= Date.parse(nextSeen[id].lastObservationAt))) nextSeen[id] = latest;
+            }
+          }
           storage.targets[target.id] = {
             initialized: true,
             seen: nextSeen,
@@ -3537,6 +3654,7 @@ export class ShoppingSiteMonitor {
             lastScanAt: completedAt,
             lastProductCount: products.length,
             ...(esliteScan ? {
+              ...(latestTarget?.esliteBaselineSweep ? { esliteBaselineSweep: latestTarget.esliteBaselineSweep } : {}),
               lastSourceProductCount: esliteScan.sourceProductCount,
               lastSuccessfulSources: esliteScan.successfulSources,
               lastFreshVerifiedCount: esliteScan.freshVerifiedCount,
@@ -3594,6 +3712,7 @@ export class ShoppingSiteMonitor {
       job.resolve(null);
     }
     await Promise.allSettled([...this.esliteVerificationJobs.values()]);
+    await Promise.allSettled([...this.esliteBaselineSweeps.values()]);
     await Promise.allSettled([...this.notificationTasks]);
     await this.resetEsliteApiContext();
     await this.browserPromise?.catch(() => {});

@@ -12,15 +12,13 @@ $watchdogPidFile = Join-Path $dataDir 'monitor-watchdog.pid'
 $servicePidFile = Join-Path $dataDir 'monitor-service.pid'
 $stopFile = Join-Path $dataDir 'monitor-service.stop'
 $disabledFile = Join-Path $dataDir 'monitor-disabled.flag'
+$autoStartDisabledFile = Join-Path $dataDir 'monitor-autostart-disabled.flag'
 $dashboardUrl = 'http://127.0.0.1:3210/'
 
 New-Item -ItemType Directory -Path $dataDir, $systemLogsDir -Force | Out-Null
 
-if ($Scheduled -and (Test-Path -LiteralPath $disabledFile)) {
+if ($Scheduled -and ((Test-Path -LiteralPath $disabledFile) -or (Test-Path -LiteralPath $autoStartDisabledFile))) {
     exit 0
-}
-if (-not $Scheduled) {
-    Remove-Item -LiteralPath $disabledFile -Force -ErrorAction SilentlyContinue
 }
 
 function Test-WatcherProcess {
@@ -33,11 +31,22 @@ function Test-WatcherProcess {
 
 try {
     $status = Invoke-RestMethod -Uri ($dashboardUrl + 'api/status') -Method Get -TimeoutSec 2
+    if ($null -eq $status.autoPurchase -or $null -eq $status.japanAuctions) { throw '3210 不是此監控服務。' }
+    if (-not $Scheduled) { Remove-Item -LiteralPath $disabledFile -Force -ErrorAction SilentlyContinue }
     Write-Host '監控服務已在運作。' -ForegroundColor Green
     Write-Host "控制台：$dashboardUrl"
     if ($OpenBrowser) { Start-Process $dashboardUrl }
     exit 0
 } catch {
+}
+
+# A power-loss damaged state must not start with empty purchase history.
+# Validate without printing JSON contents, credentials, or private records.
+$nodePath = (Get-Command node.exe -ErrorAction Stop).Source
+& $nodePath (Join-Path $ProjectRoot 'scripts\monitor-preflight.mjs') (Join-Path $ProjectRoot 'config.json') (Join-Path $dataDir 'state.json')
+if ($LASTEXITCODE -ne 0) { throw '設定或狀態資料損壞，已取消啟動；請先保留原檔並進行復原。' }
+if (-not $Scheduled) {
+    Remove-Item -LiteralPath $disabledFile -Force -ErrorAction SilentlyContinue
 }
 
 $watchdogPid = 0
@@ -63,6 +72,7 @@ for ($attempt = 1; $attempt -le 40; $attempt += 1) {
     Start-Sleep -Milliseconds 500
     try {
         $status = Invoke-RestMethod -Uri ($dashboardUrl + 'api/status') -Method Get -TimeoutSec 2
+        if ($null -eq $status.autoPurchase -or $null -eq $status.japanAuctions) { $status = $null; continue }
         break
     } catch {
     }

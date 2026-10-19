@@ -10,5 +10,4 @@ document.querySelector('#connect').onclick = async () => {
   catch (error) { status.textContent = error.message; } finally { button.disabled = false; }
 };
 document.querySelector('#stop').onclick = async () => { try { await send({ type: 'disconnect' }); await render(); } catch (error) { status.textContent = error.message; } };
-document.querySelector('#verify').onclick = async () => { try { await send({ type: 'open-verification' }); } catch (error) { status.textContent = error.message; } };
 void render();

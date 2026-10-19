@@ -9,7 +9,7 @@ async function poll() {
   if (polling) return; polling = true;
   try {
     const { token, enabled } = await chrome.storage.local.get(['token', 'enabled']); if (!enabled || !token) return;
-    const { targets } = await request('/edion-browser/bridge/poll', {}, token);
+    const { targets } = await request('/edion-browser/bridge/poll', { protocol: 2 }, token);
     for (const plan of targets) await runEdionPlan(plan, { chrome, request, token });
     await chrome.storage.local.set({ lastError: '', lastPollAt: new Date().toISOString() });
   } catch (error) { await chrome.storage.local.set({ lastError: error.message }); }
@@ -36,13 +36,6 @@ chrome.runtime.onMessage.addListener((message, _sender, reply) => {
     }
     if (message.type === 'disconnect') {
       await chrome.storage.local.set({ enabled: false }); await chrome.alarms.clear('edion'); return { ok: true };
-    }
-    if (message.type === 'open-verification') {
-      const bindings = (await chrome.storage.local.get('bindings')).bindings || {};
-      for (const binding of Object.values(bindings)) {
-        try { const tab = await chrome.tabs.get(binding.tabId); if (!tab.url?.startsWith('https://www.edion.com/item_list.html')) continue; await chrome.tabs.update(tab.id, { active: true }); await chrome.windows.update(tab.windowId, { focused: true }); return { ok: true }; } catch { /* closed */ }
-      }
-      throw new Error('尚未建立監控分頁；請先連接，等待第一次觀測');
     }
     throw new Error('未知操作');
   })().then(reply, error => reply({ error: error.message }));

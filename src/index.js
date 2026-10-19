@@ -1,5 +1,7 @@
 import fsSync from 'node:fs';
 import crypto from 'node:crypto';
+import { spawn } from 'node:child_process';
+import { OperationalLogPolicy } from './log-policy.js';
 import { safePurchaseText } from './purchase-diagnostics.js';
 import { catalogListPatch } from './product-sheet-catalog.js';
 import fs from 'node:fs/promises';
@@ -23,13 +25,16 @@ AutoPurchaseCoordinator, MultiAccountEslitePurchaseAdapter, updateAutoPurchaseSe
   formatFunboxAccountPurchaseNotification, normalizeAutoPurchaseConfig
 } from './auto-purchase.js';
 import { LocalCredentialStore } from './credential-store.js';
+import { EsliteSessionBridge } from './eslite-session-bridge.js';
 import { PurchaseReadinessCheck } from './purchase-readiness.js';
 import { PICKUP_SETUP_REQUIRED, verifyFunboxPickupOrder, verifyEslitePickupOrder } from './pickup-setup.js';
 import { SaleReminderMonitor, saleReminderListedNotification } from './sale-reminders.js';
 import { StateStore } from './state.js';
+import { AmazonRaceCoordinator } from './amazon-race-coordinator.js';
+import { AmazonRaceBridge } from './amazon-race-bridge.js';
 import { DailyDutyNotifier } from './duty-notifications.js';
 import {
-  DEFAULT_JAPAN_EXCLUDE_KEYWORDS, JAPAN_1999_BEYBLADE_LIST_URL,
+  DEFAULT_JAPAN_EXCLUDE_KEYWORDS, JAPAN_1999_BEYBLADE_LIST_URL, ensureRakutenMarketTarget,
   JapanAuctionMonitor, japanAuctionFailureDelayMs, japanAuctionTestNotification
 } from './japan-auctions.js';
 import {
@@ -37,6 +42,8 @@ import {
 } from './amazon-jp-monitor.js';
 import { AmazonJpProductOrderMonitor, normalizeAmazonJpProductUrl, normalizeAmazonJpProductMode } from './amazon-jp-product-order.js';
 import { AmazonOrderHistory } from './amazon-order-history.js';
+import { ensureJapanStoreTargets } from './japan-stores.js';
+import { isTcsbSearchTarget, TCSB_BASELINE_VERSION } from './tcsb-monitor.js';
 import { checkDiscordConnection, hasDiscordWebhook } from './discord.js';
 import {
   syncDiscordSaleBoard,
@@ -76,6 +83,9 @@ fsSync.mkdirSync(path.dirname(lifecycleLogFile), { recursive: true });
 function logLifecycle(event, details = '') {
   const line = `[${new Date().toISOString()}] ${event}${details ? ` ${details}` : ''}\n`;
   try {
+    if (fsSync.existsSync(lifecycleLogFile) && fsSync.statSync(lifecycleLogFile).size >= 2 * 1024 * 1024) {
+      fsSync.renameSync(lifecycleLogFile, lifecycleLogFile.replace('.log', `-${Date.now()}.log`));
+    }
     fsSync.appendFileSync(lifecycleLogFile, line, 'utf8');
   } catch {
     // Lifecycle logging must never prevent the monitor from starting.
@@ -120,9 +130,6 @@ config.funboxSandbox ??= {
   intervalSeconds: 5
 };
 config.funboxSandbox.enabled ??= false;
-Object.defineProperty(config.funboxSandbox, 'enabled', {
-  enumerable: true, get: () => false, set: () => {}
-});
 config.funboxSandbox.intervalSeconds = Math.max(2, Number(config.funboxSandbox.intervalSeconds) || 5);
 config.notifications ??= {
   facebook: 'discord',
@@ -271,6 +278,9 @@ for (const slot of ['A', 'B', 'C']) {
     enabled: Boolean(source.enabled),
     targetUrl: String(source.targetUrl || '').trim(),
     mode: normalizeAmazonJpProductMode(source.mode),
+    checkoutTransport: source.checkoutTransport === 'browser' ? 'browser' : 'api',
+    fastLane: source.fastLane !== false,
+    maxShippingYen: Math.max(0, Math.min(10_000, Number(source.maxShippingYen ?? 500) || 0)),
     targetSuccessCount: Math.max(1, Math.min(99, Number(source.targetSuccessCount) || 1)),
     priceToleranceYen: Math.max(0, Math.min(10, Number(source.priceToleranceYen) || 1))
   };
@@ -349,6 +359,11 @@ if (!config.japanAuctions.targets.some((target) => target.id === 'japan-rakuten-
     enabled: true
   });
 }
+ensureRakutenMarketTarget(config.japanAuctions.targets);
+if (config.japanAuctions.additionalStoresSeeded !== true) {
+  ensureJapanStoreTargets(config.japanAuctions.targets);
+  config.japanAuctions.additionalStoresSeeded = true;
+}
 const RAKUTEN_BOOKS_BEYBLADE_URL = 'https://books.rakuten.co.jp/search?sitem=BEYBLADE+X&g=006&h=100&l-id=search-c-number-03';
 const rakutenBooksTarget = config.japanAuctions.targets.find((target) => target.id === 'japan-rakuten-books-beyblade-x');
 if (!rakutenBooksTarget) {
@@ -418,6 +433,9 @@ config.shoppingSites.targets = config.shoppingSites.targets.map((target, index) 
   ...(/shop\.tcsb\.com\.tw/i.test(target.url || '') ? {
     siteName: '墊腳石購物網'
   } : {}),
+  ...(isTcsbSearchTarget(target) ? {
+    sourceType: 'tcsb-products-api', baselineVersion: TCSB_BASELINE_VERSION
+  } : {}),
   ...(target.id === 'eslite-beyblade-v3' || /eslite\.com\/exhibitions\/CU202503-00091/i.test(target.url || '') ? {
     name: target.name === 'BEYBLADE X 精選策展' ? '誠品戰鬥陀螺關鍵字探索' : target.name,
     siteName: '誠品線上',
@@ -454,7 +472,7 @@ config.shoppingSites.targets = config.shoppingSites.targets.map((target, index) 
       ? '誠品戰鬥陀螺關鍵字探索'
       : target.name || shoppingSiteName(target.url)
   ),
-  siteName: String(target.id === 'eslite-beyblade-v3' ? '誠品線上' : target.siteName || shoppingSiteName(target.url)),
+  siteName: String(isTcsbSearchTarget(target) ? '墊腳石官網' : target.id === 'eslite-beyblade-v3' ? '誠品線上' : target.siteName || shoppingSiteName(target.url)),
   enabled: target.enabled !== false,
   scheduleMode: target.id === 'eslite-beyblade-v3' ? 'default' : target.scheduleMode === 'custom' ? 'custom' : (
     target.scheduleMode === 'default' ? 'default' : (isMmToyShoppingTarget(target) ? 'custom' : 'default')
@@ -511,7 +529,7 @@ config.productKeywords ??= ['戰鬥陀螺', 'BEYBLADE'];
 config.salesKeywords ??= ['抽選', '販售', '報名', '到貨', '補貨', '開賣', '現貨', '售完', '售罄'];
 config.hotspot ??= {
   enabled: true,
-  pageUrl: '',
+  pageUrl: 'https://www.facebook.com/profile.php?id=61590975990981',
   activeHours: { start: '10:00', end: '21:00' },
   intervalSeconds: 60,
   pageLoadSeconds: 4,
@@ -638,9 +656,16 @@ function appendShoppingSiteRuntimeLog(message, channel, line) {
   runtime.shoppingSiteLogs[key] = runtime.shoppingSiteLogs[key].slice(0, 100);
 }
 
-const logDateFormatter = new Intl.DateTimeFormat('zh-TW', { dateStyle: 'short', timeStyle: 'medium' });
-function log(message, channel = 'system') {
+const operationalLogPolicy = new OperationalLogPolicy();
+const logDateFormatter = new Intl.DateTimeFormat('zh-TW', { timeZone: 'Asia/Taipei', dateStyle: 'short', timeStyle: 'medium' });
+function log(message, channel = 'system', { persist = true } = {}) {
   message = safePurchaseText(message, 1800);
+  // Live Amazon step/refresh records stay ephemeral; never deduplicate purchase
+  // steps or change the transaction workflow itself.
+  if (persist) {
+    message = operationalLogPolicy.accept(message, channel);
+    if (message === null) return;
+  }
   const line = `[${logDateFormatter.format(new Date())}] ${message}`;
   appendRuntimeLog('logs', line);
   if (channel === 'regular') appendRuntimeLog('regularLogs', line);
@@ -655,6 +680,7 @@ function log(message, channel = 'system') {
     appendRuntimeLog('shoppingLogs', line);
   }
   appendShoppingSiteRuntimeLog(message, channel, line);
+  if (!persist) return;
   try {
     appendRoutedLog(line, { message, channel });
   } catch (error) {
@@ -821,6 +847,7 @@ const shoppingSiteMonitor = new ShoppingSiteMonitor({
     channelMode: config.notifications.shopping
   }),
   onPurchaseCandidate: (candidate) => enqueueImmediateShoppingPurchaseCandidate(candidate),
+  getEslitePurchaseSettings: () => normalizeAutoPurchaseConfig(config.autoPurchase).eslite,
   onEslitePurchaseObservation: (product) => autoPurchase.observeEslitePurchaseProduct(product),
   onEsliteDiscoveryActivity: () => autoPurchase.notePlatformActivity('eslite', {
     durationMs: config.shoppingSites.boostDurationMinutes * 60 * 1000
@@ -833,6 +860,19 @@ const shoppingSiteMonitor = new ShoppingSiteMonitor({
     args: ['--disable-blink-features=AutomationControlled']
   }))
 });
+const esliteCx19Seed = shoppingSiteMonitor.esliteManualProducts()
+  .find((product) => product.id === '10042014802683232221009');
+if (!esliteCx19Seed || !esliteCx19Seed.imageUrl) {
+  await shoppingSiteMonitor.addEsliteManualProduct(
+    'https://www.eslite.com/product/10042014802683232221009',
+    {
+      title: 'BEYBLADE X戰鬥陀螺/ CX-19/ 鱷魚裂甲',
+      imageUrl: 'https://s2.eslite.com/unsafe/fit-in/x240/smart/filters:sharpen(sigma):format(webp)/s.eslite.com/b2b/vendor/vendor178962805493120260917145416/mainCoverImage1_1717420.jpg',
+      price: 'NT$350',
+      ...(!esliteCx19Seed ? { available: false, status: '無法購買' } : {})
+    }
+  );
+}
 const japanAuctionMonitor = new JapanAuctionMonitor({
   dataDir,
   state,
@@ -961,6 +1001,7 @@ const autoPurchase = new AutoPurchaseCoordinator({
   log: (message) => log(message, 'shopping')
 });
 const amazonOrderHistory = new AmazonOrderHistory(dataDir, { log: (message) => log(message, 'japan') });
+const amazonRaceCoordinator = new AmazonRaceCoordinator({ state, getConfig: slot => config.amazonJpProductOrders[slot] });
 const amazonJpProductOrders = ['A', 'B', 'C'].map((slot) => new AmazonJpProductOrderMonitor({
   dataDir,
   state,
@@ -969,7 +1010,10 @@ const amazonJpProductOrders = ['A', 'B', 'C'].map((slot) => new AmazonJpProductO
   profileName: slot === 'A' ? 'amazon-jp-product-order' : `amazon-jp-product-order-${slot.toLowerCase()}`,
   orderHistory: amazonOrderHistory,
   getConfig: () => config.amazonJpProductOrders[slot],
-  onTerminal: async () => {
+  onTerminal: async (result) => {
+    // An unknown API result holds that route. Its separately authorized
+    // frontend may still finish this wave; it is not an API retry.
+    if (result?.status === 'submitted_unconfirmed' && (amazonRaceCoordinator.connected(slot) || amazonRaceCoordinator.current(slot)?.routes.frontend)) return;
     config.amazonJpProductOrders[slot].enabled = false;
     await saveConfig();
   },
@@ -978,9 +1022,11 @@ const amazonJpProductOrders = ['A', 'B', 'C'].map((slot) => new AmazonJpProductO
     channelMode: 'discord',
     discordAudience: 'private'
   }),
-  log: (message) => log(`日亞任務 ${slot}｜${message}`, 'japan')
+  log: (message) => log(`日亞任務 ${slot}｜${message}`, 'japan', { persist: false })
 }));
 const amazonJpProductOrderBySlot = Object.fromEntries(amazonJpProductOrders.map((monitor) => [monitor.slot, monitor]));
+const amazonRace = new AmazonRaceBridge({ coordinator: amazonRaceCoordinator, monitors: amazonJpProductOrderBySlot, history: amazonOrderHistory, saveConfig });
+for (const monitor of amazonJpProductOrders) { monitor.raceCoordinator = amazonRaceCoordinator; monitor.raceBridge = amazonRace; }
 let autoPurchaseWindowSignature = '';
 async function syncAutoPurchaseWindowState({ force = false } = {}) {
   const signature = JSON.stringify({
@@ -1143,7 +1189,7 @@ function selectedFormAutoFillWorkers() {
 async function closeAllFormAutoFillWorkers() {
   await Promise.all([...formAutoFillWorkers.values()].map((worker) => worker.close()));
 }
-const TAIMALL_TEST_PAGE_URL = '';
+const TAIMALL_TEST_PAGE_URL = 'https://www.facebook.com/profile.php?id=61591565777499';
 const watcher = new Watcher({
   config,
   scanner,
@@ -1964,7 +2010,7 @@ function scheduleJapanTarget(target, { immediate = false, delayMs = null } = {})
   // General Japanese sites stay on their normal cadence. Amazon.co.jp has its
   // own independent scheduler and is intentionally not affected here.
   targetRuntime.boostUntil = null;
-  const seconds = config.japanAuctions.intervalSeconds;
+  const seconds = Math.max(config.japanAuctions.intervalSeconds, Number(target.minIntervalSeconds) || 0);
   const requestedDelay = optionalDelayMs(delayMs, seconds * 1000);
   const delay = withinHours ? (immediate ? 0 : requestedDelay) : millisecondsUntilActiveStart(now, config.japanAuctions.activeHours.start);
   targetRuntime.nextScanAt = new Date(Date.now() + delay).toISOString();
@@ -2265,23 +2311,203 @@ async function runManualJapanScan() {
 }
 
 async function runJapanUx15NotificationTest() {
-  throw new Error('發佈版本不包含演練資料');
+  const { text, options, product } = japanAuctionTestNotification();
+  const messageId = await sendNotification(text, {
+    ...options,
+    channelMode: 'discord',
+    discordAudience: 'japan'
+  });
+  const destination = await checkDiscordConnection('japan');
+  const messageUrl = destination.guildId && destination.channelId && messageId
+    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
+    : '';
+  log(`1999.co.jp UX-15 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
+  return {
+    message: '1999.co.jp UX-15 測試通知已送到日本拍賣 Discord。',
+    messageId: messageId || '',
+    messageUrl,
+    destination,
+    product
+  };
 }
 
-async function runAmazonJpNotificationTest() {
-  throw new Error('發佈版本不包含演練資料');
+async function runAmazonJpNotificationTest(body = {}) {
+  const { text, options, product } = amazonJapanTestNotification(body, amazonJapanMonitor.status().manualProducts);
+  const messageId = await sendNotification(text, {
+    ...options,
+    channelMode: 'discord',
+    discordAudience: 'japan'
+  });
+  log(`日亞官方原價 ${product.code} 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
+  return { message: `日亞官方原價 ${product.code} 測試通知已送到日本拍賣 Discord。`, messageId: messageId || '', product };
 }
 
 async function runLiveFunboxProductNotificationTest() {
-  throw new Error('發佈版本不包含演練資料');
+  const response = await fetch(FUNBOX_LIVE_TEST_URL, {
+    headers: {
+      Accept: 'application/json',
+      'Accept-Language': 'zh-TW,zh;q=0.9',
+      'Cache-Control': 'no-cache',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/126 Safari/537.36'
+    },
+    signal: AbortSignal.timeout(20000)
+  });
+  if (!response.ok) throw new Error(`Funbox 正式商品測試 HTTP ${response.status}`);
+  const products = parseFunboxResponse(await response.text(), FUNBOX_LIVE_TEST_URL);
+  const product = products.find((item) =>
+    item.title && item.url && item.imageUrl && item.price && item.stock !== null
+  );
+  if (!product) throw new Error('正式官網目前沒有可完整驗證名稱、圖片、價格與庫存的測試商品');
+
+  const messageId = await sendNotification(
+    `🧪 正式官網商品資料測試（不是真實陀螺上架）\n\n${formatFunboxNotification(product)}`,
+    {
+      discordPreview: funboxDiscordPreview(product, { test: true }),
+      embeds: [funboxEmbed(product, { test: true })],
+      channelMode: config.notifications.funbox
+    }
+  );
+  log(`Funbox 正式商品資料測試已通知：${product.title}${messageId ? `｜${messageId}` : ''}`, 'funbox');
+  return {
+    message: `測試推播已送出：${product.title}｜庫存 ${product.stock}｜不會寫入陀螺監控基線`,
+    product: {
+      id: product.id,
+      title: product.title,
+      price: product.price,
+      stock: product.stock,
+      imageUrl: product.imageUrl,
+      url: product.url
+    },
+    messageId
+  };
 }
 
 async function runFunboxPurchaseNotificationTest() {
-  throw new Error('發佈版本不包含演練資料');
+  const product = {
+    id: 'test-notification-ux21',
+    title: 'BEYBLADE X 戰鬥陀螺 UX-21 惡魔冥界改造組',
+    url: 'https://shop.funbox.com.tw/products/bb08554'
+  };
+  const message = formatFunboxAccountPurchaseNotification(product, {
+    slot: 'B', ok: true, status: 'ordered', purchaseStatus: 'success', quantity: 1,
+    payment: 'virtual_atm_home',
+    orderNumber: 'TEST-NOTIFICATION-NO-ORDER',
+    paymentUrl: 'https://shop.funbox.com.tw/orders/test-notification-no-order',
+    resultUrl: 'https://shop.funbox.com.tw/orders/test-notification-no-order',
+    paymentDeadline: '測試通知，不需付款', durationMs: 8275, attempts: 1,
+    products: [product],
+    productResults: [{ product, quantity: 1, status: 'ordered' }]
+  });
+  const messageId = await sendNotification(
+    `🧪 測試通知（不會建立訂單）\n\n${message.text}`,
+    {
+      channelMode: 'discord', discordAudience: 'private',
+      discordPreview: `🧪 ${message.preview}`
+    }
+  );
+  const destination = await checkDiscordConnection('private');
+  const messageUrl = destination.guildId && destination.channelId && messageId
+    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
+    : '';
+  log(`Funbox 自動購買結果樣式測試已送到私人 Discord${messageId ? `｜${messageId}` : ''}`, 'funbox');
+  return {
+    message: 'Funbox 自動購買結果樣式已送到私人 Discord；沒有建立訂單。',
+    messageId: messageId || '', messageUrl, destination
+  };
 }
 
-async function runSimulatedRestockNotificationTest() {
-  throw new Error('發佈版本不包含演練資料');
+async function runSimulatedRestockNotificationTest(body = {}) {
+  if (body.type === 'facebook') throw new Error('Facebook 已封存：1010FB暫存');
+  if (body.type === 'shopee') {
+    const audience = body.audience === 'private' ? 'private' : 'public';
+    const result = await shopee.test(audience);
+    log(`蝦皮 FUNBOX 模擬通知已送到${audience === 'private' ? '私人管理' : '公開情報'}頻道｜${result.messageId}`);
+    return {...result, routedAudience: audience};
+  }
+  const type = ['mmtoy', 'shopping', 'funbox', 'facebook'].includes(String(body.type))
+    ? String(body.type)
+    : 'mmtoy';
+  const requestedAudience = body.audience === 'private' ? 'private' : 'public';
+  const discordAudience = requestedAudience === 'private'
+    ? 'private'
+    : type === 'mmtoy' ? 'mmtoy' : 'public';
+  let text;
+  let embed;
+
+  if (type === 'funbox') {
+    const product = normalizeFunboxSimulationProduct(body.funbox || body);
+    text = funboxDiscordPreview(product, { test: true });
+    embed = funboxEmbed(product, { test: true });
+  } else if (type === 'facebook') {
+    const url = 'https://www.facebook.com/';
+    text = '🧪 FB 模擬通知｜方爸測試\n戰鬥陀螺販售情報｜點擊查看貼文';
+    embed = {
+      author: { name: '陀螺通知監控儀表・FB 販售情報', url },
+      title: '🧪 戰鬥陀螺販售情報（模擬）',
+      url,
+      color: 0x3c82f6,
+      description: '**店家：** 方爸測試\n**關鍵字：** 戰鬥陀螺、販售、表單\n\n**原文：** [查看 Facebook 貼文](https://www.facebook.com/)',
+      footer: { text: '模擬通知・不是真實貼文' },
+      timestamp: new Date().toISOString()
+    };
+  } else {
+    const mmtoy = type === 'mmtoy';
+    const target = mmtoy ? {
+      name: 'MM小舖戰鬥陀螺專區',
+      siteName: 'MM小舖',
+      url: 'https://mmtoyshop.com/category/%F0%9F%8C%80%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA',
+      sourceType: 'mmtoy-category'
+    } : {
+      name: '墊腳石 TAKARA TOMY 專區',
+      siteName: 'momo購物網',
+      url: 'https://www.momoshop.com.tw/TP/TP0002451/main'
+    };
+    const product = mmtoy ? {
+      id: 'simulation-mmtoy-ux16',
+      title: '【M.M小舖】『預購』 9月 TAKARA TOMY 戰鬥陀螺 UX-16 時鐘幻象 隨機強化組 對戰 復古 熱血',
+      url: 'https://mmtoyshop.com/category/%F0%9F%8C%80%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA',
+      price: 'NT$350'
+    } : {
+      id: 'simulation-momo-ux14',
+      title: 'BEYBLADE X 戰鬥陀螺 CX／BX／UX 系列',
+      url: 'https://www.momoshop.com.tw/TP/TP0002451/main',
+      price: 'NT$1,250'
+    };
+    const variant = mmtoy
+      ? { id: 'simulation-mmtoy-variant', name: '預購-1個(不可搭其他預購) #不補', stock: 1, available: true }
+      : { id: 'simulation-momo-variant', name: 'UX-14 天蠍長矛', stock: 18, available: true };
+    text = notificationPreview(target, product, variant, 'restock', { test: true });
+    embed = notificationEmbed(target, product, variant, 'restock', { test: true });
+    if (!mmtoy) {
+      text = `🧪 模擬｜${text.replace(/^[^ ]+\s*/, '')}`;
+      embed = {
+        ...embed,
+        title: `🧪 ${embed.title}`,
+        footer: { text: '模擬通知・不是真實補貨' }
+      };
+    }
+  }
+
+  const username = type === 'mmtoy' ? 'MM小舖獨立通知' : '陀螺通知監控儀表';
+  const messageId = await sendNotification(text, {
+    embeds: [embed],
+    channelMode: 'discord',
+    discordAudience,
+    username
+  });
+  const destination = await checkDiscordConnection(discordAudience);
+  const messageUrl = destination.guildId && destination.channelId && messageId
+    ? `https://discord.com/channels/${destination.guildId}/${destination.channelId}/${messageId}`
+    : '';
+  const labels = { mmtoy: 'M.M小舖補貨', shopping: '購物網站補貨', funbox: 'Funbox 官網上架', facebook: 'FB 販售情報' };
+  log(`${labels[type]}模擬通知已送到${requestedAudience === 'private' ? '私人管理頻道' : discordAudience === 'mmtoy' ? 'M.M小舖獨立頻道' : '公開情報頻道'}${messageId ? `｜${messageId}` : ''}`);
+  return {
+    message: `${labels[type]}模擬通知已由 Discord 接受`,
+    messageId: messageId || '',
+    messageUrl,
+    destination,
+    routedAudience: discordAudience
+  };
 }
 
 function approximatePublishedTime(label, now = new Date()) {
@@ -2474,7 +2700,10 @@ const purchaseReadiness = new PurchaseReadinessCheck({
     || Object.values(autoPurchase.adapters).some(adapter => (adapter.runtimeStatus?.().accounts || [])
       .some(account => account.busy || account.interactiveLoginOpen || account.loginState === 'checking'))
 });
+const esliteBrowser = new EsliteSessionBridge({ state, importSession: body => autoPurchase.adapters.eslite.importBrowserSession(body) });
 const dashboard = createDashboard({
+  amazonRace,
+  esliteBrowser,
   onCheckPurchaseReadiness: (body = {}) => purchaseReadiness.check(String(body.platform || '')),
   shopee,
   edionBrowser,
@@ -2609,6 +2838,7 @@ const dashboard = createDashboard({
             firstSeenAt: product?.firstSeenAt || null
           })),
           esliteRoutes: saved?.esliteRoutes || null,
+          esliteBaselineSweep: saved?.esliteBaselineSweep || null,
           discoveryPages: Object.values(saved?.discoveryPages || {}),
           excludedCount: Number(saved?.lastExcludedCount || 0),
           lastScanAt: saved?.lastScanAt || null,
@@ -2657,6 +2887,8 @@ const dashboard = createDashboard({
         return {
           ...target,
           ...(chromeBridge ? { chromeBridge } : {}),
+          ...(target.sourceType === 'rakuten-item' ? { singleProduct: Object.values(saved.products || {})
+            .map(({ title, price, available, stock }) => ({ title, price, available, stock }))[0] || null } : {}),
           initialized: Boolean(saved.initialized),
           productCount: Number(saved.lastProductCount || 0),
           baselineProductCount: Object.keys(saved.products || {}).length,
@@ -2672,8 +2904,8 @@ const dashboard = createDashboard({
           backoffUntil: targetRuntime.backoffUntil,
           boostActive,
           effectiveIntervalSeconds: targetRuntime.backoffUntil && targetRuntime.nextScanAt
-            ? Math.max(config.japanAuctions.intervalSeconds, Math.ceil((Date.parse(targetRuntime.nextScanAt) - Date.now()) / 1000))
-            : config.japanAuctions.intervalSeconds
+            ? Math.max(config.japanAuctions.intervalSeconds, Number(target.minIntervalSeconds) || 0, Math.ceil((Date.parse(targetRuntime.nextScanAt) - Date.now()) / 1000))
+            : Math.max(config.japanAuctions.intervalSeconds, Number(target.minIntervalSeconds) || 0)
         };
       })
     },
@@ -2716,13 +2948,24 @@ const dashboard = createDashboard({
     const targetUrl = normalizeAmazonJpProductUrl(body.targetUrl || current.targetUrl);
     const targetSuccessCount = Math.max(1, Math.min(99, Number(body.targetSuccessCount) || 1));
     const taskChanged = targetUrl !== current.targetUrl || targetSuccessCount !== current.targetSuccessCount;
+    if ((taskChanged || body.resetProgress === true) && amazonRaceCoordinator.pending(slot)) throw new Error('雙路有進行中／待核對交易，不能換商品或重設');
+    if ((taskChanged || body.resetProgress === true) && amazonJpProductOrder.hasPendingApiTransaction()) {
+      throw new Error('日亞 API 有未核對交易，不能換商品或重設；請先核對官方訂單／購物車');
+    }
     const mode = normalizeAmazonJpProductMode(body.mode ?? current.mode);
+    if (!enabled) await amazonRaceCoordinator.cancel(slot);
+    if (taskChanged || body.resetProgress === true) await amazonRaceCoordinator.reset(slot);
     amazonJpProductOrder.stop();
     config.amazonJpProductOrders[slot] = {
       enabled,
       mode,
+      checkoutTransport: current.checkoutTransport === 'browser' ? 'browser' : 'api',
+      // Old, still-open dashboard tabs always sent false for B/C. Once the
+      // task has been upgraded, a normal settings save must not downgrade it.
+      fastLane: current.fastLane === true || (body.fastLane ?? current.fastLane ?? true) === true,
       targetUrl,
       targetSuccessCount,
+      maxShippingYen: Math.max(0, Math.min(10_000, Number(body.maxShippingYen ?? current.maxShippingYen ?? 500) || 0)),
       priceToleranceYen: Math.max(0, Math.min(10, Number(body.priceToleranceYen) || 1))
     };
     if (taskChanged || body.resetProgress === true) await amazonJpProductOrder.resetProgress();
@@ -2732,16 +2975,36 @@ const dashboard = createDashboard({
       await amazonJpProductOrder.closeBrowser();
       amazonJpProductOrder.interactive = false;
     }
-    const modeDescription = mode === 'hybrid' ? '每 5 秒檢查＋補貨訊號立即觸發；不重疊，結帳中停止刷新，遇阻擋降速' : '只由日亞原價監控的同 ASIN 新品／補貨訊號觸發，不定時刷新';
-    log(`日亞商品頁任務 ${slot} 已${enabled ? '啟用' : '停止'}；${modeDescription}。`, 'japan');
+    const modeDescription = mode === 'hybrid' ? `每 ${amazonJpProductOrder.pollIntervalMs() / 1000} 秒檢查＋補貨訊號立即觸發；不重疊，結帳中停止刷新，遇阻擋降速` : '只由日亞原價監控的同 ASIN 新品／補貨訊號觸發，不定時刷新';
+    log(`日亞商品頁任務 ${slot} 已${enabled ? '啟用' : '停止'}；${modeDescription}。`, 'japan', { persist: false });
     return { message: enabled ? `日亞任務 ${slot} 已啟用：${modeDescription}；成功 ${targetSuccessCount} 次後停止。${amazonJpProductOrder.interactive ? '目前登入視窗開啟中，請先完成登入檢查。' : ''}` : `日亞任務 ${slot} 已停止。` };
   },
   onOpenAmazonJpProductOrderLogin: (body = {}) => (amazonJpProductOrderBySlot[String(body.slot || 'A').toUpperCase()] || amazonJpProductOrderBySlot.A).openLogin(),
   onCompleteAmazonJpProductOrderLogin: (body = {}) => (amazonJpProductOrderBySlot[String(body.slot || 'A').toUpperCase()] || amazonJpProductOrderBySlot.A).completeLogin(),
+  onClearAmazonJpProductOrderLogs: async () => {
+    for (const monitor of Object.values(amazonJpProductOrderBySlot)) monitor.clearDiagnostics();
+    for (const runtime of amazonRace.runtime.values()) { runtime.steps = []; runtime.refreshCount = 0; }
+    for (const key of ['logs', 'japanLogs']) runtime[key] = (runtime[key] || []).filter(line => !/日亞任務 [ABC]｜|日亞商品頁任務 [ABC]/.test(line));
+    await state.save();
+    return { message: '已清空 ABC 即時 LOG 與刷新次數；任務繼續執行，下單紀錄不受影響。' };
+  },
+  onReadAmazonJpOrderEvidence: (recordId,fileName) => amazonOrderHistory.readEvidence(recordId,fileName),
   onScanAmazonJpProductOrder: async (body = {}) => {
     const amazonJpProductOrder = amazonJpProductOrderBySlot[String(body.slot || 'A').toUpperCase()] || amazonJpProductOrderBySlot.A;
-    const result = await amazonJpProductOrder.scanOnce();
-    return { message: result.skipped ? '商品頁正在處理中' : `只讀檢查完成：${result.snapshot?.asin || '目標商品'}｜${result.snapshot?.evaluation || result.status}；未觸發下單。` };
+    if (body.check === true && ['granted', 'unknown'].includes(amazonRaceCoordinator.current(amazonJpProductOrder.slot)?.routes.frontend?.state)) return amazonRace.inspect(amazonJpProductOrder.slot);
+    if (body.cartReviewed === true) return amazonJpProductOrder.confirmApiCartReviewed();
+    if(body.check === true && amazonJpProductOrder.storage().status === 'needs_review' && amazonJpProductOrder.hasPendingApiTransaction() && !amazonJpProductOrder.canRecoverPreSubmit()){
+      amazonJpProductOrder.assertIdle();
+      const slot=amazonJpProductOrder.slot;
+      config.amazonJpProductOrders[slot].enabled=false;amazonJpProductOrder.stop();await saveConfig();
+    }
+    const result = body.check === true ? await amazonJpProductOrder.check()
+      : amazonJpProductOrder.storage().status === 'needs_review' && amazonJpProductOrder.hasPendingApiTransaction()
+      ? await amazonJpProductOrder.reconcileApiOrder() : await amazonJpProductOrder.scanOnce();
+    return { message: result.message || (result.skipped ? '任務忙碌或交易待核對；本次未加車／送單'
+      : result.status === 'ordered' ? `官方查單確認成立：${result.snapshot.orderId}；沒有重送。`
+      : result.status === 'submitted_unconfirmed' ? '官方訂單仍待核對；沒有重送。'
+      : `API 只讀檢查完成：${result.snapshot?.asin || '目標商品'}｜${result.snapshot?.evaluation || result.status}；未觸發下單。`) };
   },
   onTestFunboxProductNotification: runLiveFunboxProductNotificationTest,
   onTestFunboxPurchaseNotification: runFunboxPurchaseNotificationTest,
@@ -2812,6 +3075,8 @@ const dashboard = createDashboard({
     return { message: '已合併黑白名單：保留目的地原有項目；未更改購買模式、付款或啟用狀態。' };
   },
   onViewEsliteCredentials: (slot) => purchaseCredentials.viewEsliteCredentials(slot),
+  onImportEsliteBrowserSession: (body) => autoPurchase.adapters.eslite.importBrowserSession(body),
+  onEsliteDisplayIdentities: () => purchaseCredentials.getEsliteDisplayIdentities(),
   onSaveAutoPurchaseCredentials: async (body) => {
     const platform = String(body.platform || '');
     if (!['funbox', 'eslite'].includes(platform)) throw new Error('此平台自動下單已封存，不再提供帳密操作');
@@ -2867,6 +3132,7 @@ const dashboard = createDashboard({
     log(result.message, platform === 'funbox' ? 'funbox' : 'shopping');
     return result;
   },
+  onPurchaseAccountAction: (body) => autoPurchase.accountAction(body),
   onCompleteAutoPurchaseLogin: async (body) => {
     const platform = String(body.platform || '');
     const result = await autoPurchase.completeLogin(platform, { accountSlot: body.accountSlot });
@@ -3446,6 +3712,10 @@ const dashboard = createDashboard({
       url.hash = '';
       target.url = url.href;
     }
+    if (isTcsbSearchTarget(target)) {
+      target.sourceType = 'tcsb-products-api';
+      target.baselineVersion = TCSB_BASELINE_VERSION;
+    }
     config.shoppingSites.targets.push(target);
     await saveConfig();
     await autoPurchase.applyRuntimeConfig();
@@ -3892,10 +4162,30 @@ if (!config.systemPause.active) {
 
 let shutdownPromise = null;
 
+// Separate process: scanning/checkout must not wait for historical log IO.
+let logMaintenanceWorker = null;
+function scheduleLogMaintenance() {
+  if (logMaintenanceWorker || shutdownPromise) return;
+  logMaintenanceWorker = spawn(process.execPath, [path.join(rootDir, 'scripts', 'maintain-logs.mjs'), '--apply'], {
+    cwd: rootDir, windowsHide: true, stdio: 'ignore'
+  });
+  logMaintenanceWorker.on('error', error => { log(`日誌清理失敗：${error.message}`); logMaintenanceWorker = null; });
+  logMaintenanceWorker.on('exit', code => {
+    logMaintenanceWorker = null;
+    if (code) log(`日誌清理失敗：維護程式退出 ${code}`);
+  });
+}
+const logMaintenanceStart = setTimeout(scheduleLogMaintenance, 60_000);
+logMaintenanceStart.unref();
+const logMaintenanceTimer = setInterval(scheduleLogMaintenance, 6 * 60 * 60_000);
+logMaintenanceTimer.unref();
+
 function shutdown(reason = 'shutdown', exitCode = 0) {
   if (shutdownPromise) return shutdownPromise;
   logLifecycle('STOP_REQUEST', `reason=${reason} exitCode=${exitCode}`);
   shutdownPromise = (async () => {
+    clearTimeout(logMaintenanceStart);
+    clearInterval(logMaintenanceTimer);
     clearSchedule();
     clearHotspotSchedule();
     clearFormPrewarmSchedule();

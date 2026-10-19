@@ -4,17 +4,26 @@ import path from 'node:path';
 import * as cheerio from 'cheerio';
 import iconv from 'iconv-lite';
 import { chromium } from 'playwright';
+import { canonicalRakutenItemUrl, parseRakutenItem } from './rakuten-item.js';
+import { isJapanStore, classifyJapanStoreUrl, parseJapanStoreProducts, readJapanStoreProducts } from './japan-stores.js';
 
 const BLOCKED_WORDS = /Just a moment|Checking your browser|Attention Required|Reference\s*#|アクセスが集中|Bot detection|通信に問題があるためアクセスを遮断|正在執行安全驗證|驗證您是人類|請稍候|セキュリティ検証|人間であることを確認/i;
 const BLOCKED_MARKUP = /cdn-cgi\/challenge-platform|cf-chl-widget|_cf_chl_opt|challenges\.cloudflare\.com\/turnstile/i;
-const HTTP_FAST_PATH_SOURCES = new Set(['rakuten-search', 'rakuten-books', 'taiyo']);
+const HTTP_FAST_PATH_SOURCES = new Set(['rakuten-item', 'rakuten-search', 'rakuten-books', 'taiyo']);
 export const JAPAN_AUCTION_NOTIFICATION_COOLDOWN_MS = 24 * 60 * 60 * 1000;
 const JAPAN_AUCTION_NOTIFICATION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
 export const JAPAN_1999_BEYBLADE_LIST_URL = 'https://www.1999.co.jp/list/2613/7/1?soldout=0';
+export const JAPAN_RAKUTEN_MARKET_URL = 'https://search.rakuten.co.jp/search/mall/beyblade/';
+
+export function ensureRakutenMarketTarget(targets) {
+  if (targets.some(target => target.id === 'japan-rakuten-market-beyblade' || target.url === JAPAN_RAKUTEN_MARKET_URL)) return;
+  targets.push({ id: 'japan-rakuten-market-beyblade', name: '日本樂天全市場 Beyblade 搜尋（第 1 頁）',
+    siteName: '日本樂天市場', sourceType: 'rakuten-search', url: JAPAN_RAKUTEN_MARKET_URL, enabled: true });
+}
 
 export function japanAuctionFailureDelayMs(sourceType, failureCount, baseIntervalSeconds, { verificationRequired = false } = {}) {
   const baseMs = Math.max(1, Number(baseIntervalSeconds) || 20) * 1000;
-  if (sourceType !== 'edion' && !verificationRequired) return baseMs;
+  if (sourceType !== 'edion' && !isJapanStore(sourceType) && !verificationRequired) return baseMs;
   const attempt = Math.max(1, Number(failureCount) || 1);
   return Math.min(15 * 60_000, Math.max(60_000, baseMs * (2 ** Math.min(attempt, 6))));
 }
@@ -162,6 +171,8 @@ export function classifyJapanAuctionUrl(value) {
   if (!['http:', 'https:'].includes(url.protocol)) throw new Error('網址必須使用 http 或 https');
   url.protocol = 'https:';
   url.hash = '';
+  const store = classifyJapanStoreUrl(url.href);
+  if (store) return store;
   const host = url.hostname.toLowerCase().replace(/^www\./, '');
   if (host === '1999.co.jp' && /\/(?:eng\/search|search|list(?:\/|$))/i.test(url.pathname)) {
     return {
@@ -175,12 +186,15 @@ export function classifyJapanAuctionUrl(value) {
       url: url.href, parserLabel: '日本樂天分類頁解析器'
     };
   }
+  if (host === 'item.rakuten.co.jp') {
+    return { sourceType: 'rakuten-item', siteName: '日本樂天單品', defaultName: '日本樂天單品直查',
+      url: canonicalRakutenItemUrl(url.href), parserLabel: '日本樂天官方單品資料解析器' };
+  }
   if (host === 'search.rakuten.co.jp' && /\/search\/mall\//i.test(url.pathname)) {
     const shopId = clean(url.searchParams.get('sid'));
-    if (!shopId) throw new Error('日本樂天搜尋頁必須包含店舖 sid，避免掃到整個樂天市場');
     return {
-      sourceType: 'rakuten-search', siteName: '日本樂天', defaultName: '日本樂天店舖商品搜尋',
-      url: url.href, shopId, parserLabel: '日本樂天店舖搜尋頁解析器'
+      sourceType: 'rakuten-search', siteName: '日本樂天', defaultName: shopId ? '日本樂天店舖商品搜尋' : '日本樂天全市場商品搜尋（第 1 頁）',
+      url: url.href, ...(shopId ? { shopId } : {}), parserLabel: shopId ? '日本樂天店舖搜尋頁解析器' : '日本樂天全市場搜尋頁解析器'
     };
   }
   if (host === 'books.rakuten.co.jp' && /^\/search\/?$/i.test(url.pathname)) {
@@ -209,7 +223,7 @@ export function classifyJapanAuctionUrl(value) {
       url: url.href, parserLabel: 'Taiyo Market 首頁 48 項價格排序解析器'
     };
   }
-  throw new Error('目前可自動辨識：1999.co.jp 日本國內商品清單、日本樂天分類頁／店舖搜尋頁、樂天 Books、EDION、Taiyo Market 商品搜尋頁');
+  throw new Error('目前可自動辨識：1999.co.jp 日本國內商品清單、日本樂天單品／分類頁／搜尋頁、樂天 Books、EDION、Taiyo Market、OCN、Nojima、日本玩具反斗城商品搜尋頁');
 }
 
 export function parse1999Products(html, pageUrl = 'https://www.1999.co.jp/') {
@@ -291,7 +305,11 @@ export function parseRakutenSearchProducts(html, pageUrl = 'https://search.rakut
     if (expectedShopId && cardShopId && cardShopId !== expectedShopId) return;
     const anchor = card.find('h2 a[href*="item.rakuten.co.jp"], a[href*="item.rakuten.co.jp"]').filter((__, item) => clean($(item).text())).first();
     const fallbackAnchor = card.find('a[href*="item.rakuten.co.jp"]').first();
-    const url = absoluteUrl(anchor.attr('href') || fallbackAnchor.attr('href'), pageUrl);
+    const href = anchor.attr('href') || fallbackAnchor.attr('href');
+    if (!href) return;
+    const url = absoluteUrl(href, pageUrl);
+    // Ads/redirects without a genuine item URL must not become fake products.
+    try { if (new URL(url).hostname !== 'item.rakuten.co.jp') return; } catch { return; }
     const title = deduplicateTitle(anchor.text() || card.find('h2').first().text() || fallbackAnchor.find('img').attr('alt'));
     if (!url || !title || seen.has(productId(url))) return;
     const rawPrice = clean(card.attr('data-track-price') || card.find('[class*="price"]').first().text());
@@ -447,6 +465,8 @@ export function parseTaiyoMarketProducts(html, pageUrl = 'https://taiyo-market.c
 }
 
 export function parseJapanAuctionPage(html, target) {
+  if (isJapanStore(target.sourceType)) return parseJapanStoreProducts(html, target);
+  if (target.sourceType === 'rakuten-item') return parseRakutenItem(html, target.url);
   if (target.sourceType === '1999') return parse1999Products(html, target.url);
   if (target.sourceType === 'rakuten') return parseRakutenProducts(html, target.url);
   if (target.sourceType === 'rakuten-search') return parseRakutenSearchProducts(html, target.url);
@@ -676,6 +696,7 @@ export class JapanAuctionMonitor {
       throw new Error(`網站回傳 HTTP ${response.status()}，本輪保留既有基線`);
     }
     if (target.sourceType === 'rakuten') await page.waitForSelector('#risFil', { timeout: 20_000 });
+    if (target.sourceType === 'rakuten-item') await page.waitForSelector('#item-page-app-data', { state: 'attached', timeout: 15_000 });
     if (target.sourceType === 'rakuten-search') await page.waitForSelector('.searchresultitem, main, body', { timeout: 20_000 });
     if (target.sourceType === 'rakuten-books') await page.waitForSelector('.rbcomp__item-list__item, main, body', { timeout: 20_000 });
     if (target.sourceType === '1999') {
@@ -727,7 +748,7 @@ export class JapanAuctionMonitor {
   }
 
   async inspectTarget(target) {
-    const parsedProducts = parseJapanAuctionPage(await this.load(target), target);
+    const parsedProducts = await this.productsFor(target);
     if (target.sourceType === 'taiyo' && parsedProducts.length !== 48) {
       throw new Error(`Taiyo Market 第 1 頁應有 48 項，目前只讀到 ${parsedProducts.length} 項，本輪不更新基線`);
     }
@@ -740,6 +761,12 @@ export class JapanAuctionMonitor {
       availableProducts: products.filter((product) => product.available).length,
       sampleProducts: products.slice(0, 3).map((product) => ({ title: product.title, price: product.price }))
     };
+  }
+
+  async productsFor(target) {
+    return isJapanStore(target.sourceType)
+      ? readJapanStoreProducts(target, { fetcher: this.fetcher, knownProducts: Object.values(this.status(target).products || {}) })
+      : parseJapanAuctionPage(await this.load(target), target);
   }
 
   scanTarget(target) {
@@ -777,16 +804,19 @@ export class JapanAuctionMonitor {
         }
       : storedPrevious;
     try {
-      const parsedProducts = browserProducts || parseJapanAuctionPage(await this.load(target), target);
+      const parsedProducts = browserProducts || await this.productsFor(target);
       if (target.sourceType === 'taiyo' && parsedProducts.length !== 48) {
         throw new Error(`Taiyo Market 第 1 頁應有 48 項，目前只讀到 ${parsedProducts.length} 項，本輪不更新基線`);
       }
-      if (!parsedProducts.length) {
+      if (!parsedProducts.length && !(target.sourceType === 'toysrus' && parsedProducts.verifiedEmpty === true)) {
         throw new Error('解析器沒有讀到任何商品，可能是網站驗證頁或版型異常；本輪保留既有基線');
       }
       const excludedProducts = [];
       const products = [];
       for (const product of parsedProducts) {
+        if (isJapanStore(target.sourceType) && product.available === null && previous.products?.[product.id]) {
+          product.available = previous.products[product.id].available;
+        }
         if (browserProducts && product.available === undefined) {
           product.available = previous.products?.[product.id]?.available === true;
         }
@@ -795,6 +825,10 @@ export class JapanAuctionMonitor {
         else products.push(product);
       }
       const current = Object.fromEntries(products.map((product) => [product.id, { ...product, missingRounds: 0 }]));
+      // Whole-market ranking moves items between pages. Absence on page 1 is
+      // not proof of stock-out, and must not manufacture a later restock event.
+      const rankingOnly = isJapanStore(target.sourceType)
+        || target.sourceType === 'rakuten-search' && !new URL(target.url).searchParams.get('sid');
       let discovered = 0;
       let restocked = 0;
       let notified = 0;
@@ -811,7 +845,8 @@ export class JapanAuctionMonitor {
           // scan and marked every known product unavailable. On the first
           // healthy recovery, keep notifying genuinely new IDs but do not
           // emit a false restock storm for already-known products.
-          const kind = old ? (old.available === false && !recoveringFromEmptyResult ? 'restock' : '') : 'new';
+          const becameAvailable = old && (old.available === false || isJapanStore(target.sourceType) && old.available === null);
+          const kind = old ? (becameAvailable && !recoveringFromEmptyResult ? 'restock' : '') : 'new';
           if (!kind) continue;
           if (kind === 'new') discovered += 1; else restocked += 1;
           const recent = this.recentNotification(product, startedAt);
@@ -835,7 +870,7 @@ export class JapanAuctionMonitor {
         // the next time another loader returns the same product.
         if (!current[id] && !excludedIds.has(id) && !japanProductExclusionReason(old, this.getExcludeKeywords())) {
           const missingRounds = Number(old.missingRounds || 0) + 1;
-          current[id] = { ...old, missingRounds, available: !browserProducts && missingRounds >= 2 ? false : old.available };
+          current[id] = { ...old, missingRounds, available: !browserProducts && !rankingOnly && missingRounds >= 2 ? false : old.available };
         }
       }
       const previousExcluded = previous.excluded || {};

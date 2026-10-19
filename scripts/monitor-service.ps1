@@ -8,6 +8,7 @@ $dataDir = Join-Path $ProjectRoot 'data'
 $logsDir = Join-Path $ProjectRoot 'logs\\系統'
 $archiveLogsDir = Join-Path $ProjectRoot 'logs\\原始封存'
 $stopFile = Join-Path $dataDir 'monitor-service.stop'
+$disabledFile = Join-Path $dataDir 'monitor-disabled.flag'
 $watchdogPidFile = Join-Path $dataDir 'monitor-watchdog.pid'
 $servicePidFile = Join-Path $dataDir 'monitor-service.pid'
 $watchdogLog = Join-Path $logsDir 'watchdog.log'
@@ -20,6 +21,10 @@ New-Item -ItemType Directory -Path $dataDir, $logsDir, $archiveLogsDir -Force | 
 function Write-WatchdogLog {
     param([string]$Message)
     $line = '[{0}] {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+    if ((Test-Path -LiteralPath $watchdogLog) -and (Get-Item -LiteralPath $watchdogLog).Length -ge 2MB) {
+        $rotatedWatchdog = Join-Path $logsDir ('watchdog-' + (Get-Date -Format 'yyyyMMdd-HHmmss-fff') + '.log')
+        Move-Item -LiteralPath $watchdogLog -Destination $rotatedWatchdog
+    }
     Add-Content -LiteralPath $watchdogLog -Value $line -Encoding UTF8
 }
 
@@ -30,13 +35,18 @@ try {
     exit 1
 }
 
+$serviceMutex = New-Object Threading.Mutex($false, 'Local\KenBeybladeWatcherService')
+try { $serviceMutexOwned = $serviceMutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $serviceMutexOwned = $true }
+if (-not $serviceMutexOwned) { $serviceMutex.Dispose(); exit 0 }
+if ((Test-Path -LiteralPath $stopFile) -or (Test-Path -LiteralPath $disabledFile)) {
+    $serviceMutex.ReleaseMutex(); $serviceMutex.Dispose(); exit 0
+}
 Set-Content -LiteralPath $watchdogPidFile -Value $PID -Encoding ASCII
-Remove-Item -LiteralPath $stopFile -Force -ErrorAction SilentlyContinue
 Write-WatchdogLog "守護程式啟動，PID=$PID。"
 $runNumber = 0
 
 try {
-    while (-not (Test-Path -LiteralPath $stopFile)) {
+    while (-not (Test-Path -LiteralPath $stopFile) -and -not (Test-Path -LiteralPath $disabledFile)) {
         if ($runNumber -gt 0) {
             $archiveStamp = Get-Date -Format 'yyyyMMdd-HHmmss'
             if ((Test-Path -LiteralPath $stdoutLog) -and (Get-Item -LiteralPath $stdoutLog).Length -gt 0) {
@@ -91,4 +101,6 @@ try {
     Remove-Item -LiteralPath $servicePidFile -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath $watchdogPidFile -Force -ErrorAction SilentlyContinue
     Write-WatchdogLog '守護程式已停止。'
+    if ($serviceMutexOwned) { $serviceMutex.ReleaseMutex() }
+    $serviceMutex.Dispose()
 }

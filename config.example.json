@@ -7,13 +7,19 @@
     "notifyExistingOnFirstRun": false,
     "activeHours": { "start": "09:00", "end": "22:00" }
   },
+  "funboxSandbox": { "enabled": false, "intervalSeconds": 5 },
+  "notifications": { "funbox": "discord", "shopping": "discord" },
+  "activeHours": { "start": "09:00", "end": "22:00" },
   "shoppingSites": {
     "enabled": false,
     "intervalSeconds": 60,
-    "activeHours": { "start": "09:00", "end": "22:00" }
+    "activeHours": { "start": "09:00", "end": "22:00" },
+    "targets": [{
+      "id": "tcsb-beyblade", "name": "墊腳石官網戰鬥陀螺", "siteName": "墊腳石官網",
+      "url": "https://www.tcsb.com.tw/search?query=beyblade+x+%E6%88%B0%E9%AC%A5%E9%99%80%E8%9E%BA&place_of_origin=%E5%85%B6%E4%BB%96",
+      "sourceType": "tcsb-products-api", "baselineVersion": "tcsb-products-v1", "enabled": true
+    }]
   },
-  "notifications": { "funbox": "discord", "shopping": "discord" },
-  "activeHours": { "start": "09:00", "end": "22:00" },
   "autoPurchase": {
     "enabled": false,
     "funbox": {
@@ -30,13 +36,17 @@
       "action": "checkout",
       "quantity": 1,
       "payment": "virtual_atm_home",
-      "buyMode": "whitelist",
+      "buyMode": "allow_list",
       "buyKeywords": [],
       "skipBuyKeywords": [],
       "priorityKeywords": []
     }
   },
-  "japanAuctions": { "enabled": false, "targets": [] },
+  "japanAuctions": { "enabled": false, "targets": [
+    { "id": "japan-ocn-official-beyblade", "name": "OCN 官網 Beyblade 搜尋", "siteName": "OCN 官網", "sourceType": "ocn", "url": "https://nttxstore.jp/shop/goods/search.aspx?search=x&ct=&keyword=beyblade&search=search", "enabled": true, "minIntervalSeconds": 60 },
+    { "id": "japan-nojima-beyblade", "name": "Nojima Beyblade 搜尋", "siteName": "Nojima Online", "sourceType": "nojima", "url": "https://online.nojima.co.jp/app/catalog/list/init?searchCategoryCode=0&searchMethod=0&searchWord=beyblade", "enabled": true, "minIntervalSeconds": 60 },
+    { "id": "japan-toysrus-beyblade", "name": "日本玩具反斗城 CX-20／BX-54 優先搜尋", "siteName": "玩具反斗城.jp", "sourceType": "toysrus", "url": "https://www.toysrus.co.jp/ja-jp/search/?q=%E3%83%99%E3%82%A4%E3%83%96%E3%83%AC%E3%83%BC%E3%83%89&lang=ja_JP", "focusKeywords": ["CX-20", "BX-54"], "enabled": true, "minIntervalSeconds": 60 }
+  ] },
   "amazonJp": { "enabled": false, "watchProducts": [], "xSignalUrls": [] },
   "amazonJpProductOrders": {},
   "retiredFeatures": { "facebook": "archived" }

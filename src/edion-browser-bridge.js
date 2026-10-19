@@ -37,9 +37,31 @@ export class EdionBrowserBridge {
   }
   root() {
     this.state.data.commerce ||= {};
-    return this.state.data.commerce.edionBrowser ||= { runtime: {} };
+    const root = this.state.data.commerce.edionBrowser ||= { runtime: {} };
+    root.runtime ||= {};
+    for (const [id, runtime] of Object.entries(root.runtime)) {
+      if (runtime.noManualRequired === true) continue;
+      // Legacy DOM polls are not failed fresh GETs. Keep the existing cooldown
+      // and baseline, but migrate obsolete instructions and the retry counter.
+      runtime.noManualRequired = true;
+      runtime.failureCount = 0;
+      runtime.alertStatus = 'disabled_no_manual_prompt';
+      if (['verification_required', 'unreadable'].includes(runtime.health)) {
+        runtime.error = runtime.health === 'verification_required'
+          ? '官網暫時受限；背景冷卻後自動重查，不需手動操作；庫存未更新'
+          : '背景讀取未完成；自動重查，保留舊基線；庫存未更新';
+        const targetState = this.state.data.commerce.japanAuctions?.targets?.[id];
+        if (targetState) targetState.lastError = runtime.error;
+      }
+    }
+    return root;
   }
   serial(work) { const promise = this.queue.then(work); this.queue = promise.catch(() => {}); return promise; }
+  reloadIntervalMs(runtime = {}) {
+    const recentBlock = this.now() - Date.parse(runtime.lastVerificationAt || '') < 86400000;
+    const recoverySeconds = recentBlock ? Math.min(1800, 900 * 2 ** Math.min(1, Math.max(0, Number(runtime.verificationCount || 1) - 1))) : 0;
+    return Math.max(300, Number(this.intervalSeconds()) || 300, recoverySeconds) * 1000;
+  }
   async pair() {
     const token = randomBytes(32).toString('hex');
     const root = this.root(); root.tokenHash = hash(token).toString('hex'); root.extensionOrigin = null;
@@ -59,24 +81,30 @@ export class EdionBrowserBridge {
     const connected = this.lastBridgeAt > 0 && this.now() - this.lastBridgeAt < freshMs;
     if (id) {
       const runtime = root.runtime[id] || {};
-      const fresh = connected && this.now() - Date.parse(runtime.checkedAt || '') < freshMs;
+      const fresh = connected && this.now() - Date.parse(runtime.lastDataAt || '') < this.reloadIntervalMs(runtime) + freshMs;
       const targetEnabled = this.getTargets().some(t => t.id === id && t.enabled !== false);
-      return { ...runtime, connected, fresh, state: !this.enabled() || !targetEnabled ? 'paused' : !connected ? 'disconnected' : !fresh ? 'waiting' : runtime.health,
-        intervalSeconds: Math.max(60, Number(this.intervalSeconds()) || 60) };
+      const restricted = ['verification_required', 'unreadable'].includes(runtime.health);
+      return { ...runtime, connected, fresh, state: !this.enabled() || !targetEnabled ? 'paused' : !connected ? 'disconnected'
+        : this.clientProtocol !== 2 ? 'waiting' : restricted ? 'auto_wait' : !fresh ? 'stale' : runtime.health,
+        noManualRequired: true, intervalSeconds: this.reloadIntervalMs(runtime) / 1000 };
     }
     return { connected, paired: Boolean(root.extensionOrigin), enabled: this.enabled(), lastBridgeAt: this.lastBridgeAt ? new Date(this.lastBridgeAt).toISOString() : null,
-      extensionDirectory: path.resolve(this.dataDir, '../extensions/edion-monitor'), intervalSeconds: Math.max(60, Number(this.intervalSeconds()) || 60) };
+      extensionDirectory: path.resolve(this.dataDir, '../extensions/edion-monitor'), protocol: this.clientProtocol || 0,
+      noManualRequired: true, intervalSeconds: this.reloadIntervalMs() / 1000 };
   }
-  plans() {
-    if (!this.enabled()) return [];
+  plans(protocol = 2) {
+    this.clientProtocol = protocol;
+    // Old runners only read cached DOM or reload pages. Do not give them work
+    // that could be misreported as a newly fetched stock snapshot.
+    if (!this.enabled() || protocol !== 2) return [];
     const root = this.root(); const now = this.now();
     return this.getTargets().filter(t => t.enabled !== false && t.sourceType === 'edion' && t.transport === 'chrome-bridge').flatMap(target => {
       const runtime = root.runtime[target.id] || {};
       const pending = this.pending.get(target.id);
       if (pending && now - pending.at < 40_000) return [];
-      if (now < Date.parse(runtime.nextObserveAt || '')) return [];
+      if ((runtime.lastDataAt || runtime.health !== 'ready') && now < Date.parse(runtime.nextReloadAt || '')) return [];
       const scanId = randomBytes(16).toString('hex');
-      const action = runtime.health === 'verification_required' || now < Date.parse(runtime.nextReloadAt || '') ? 'observe' : 'reload';
+      const action = 'fetch';
       this.pending.set(target.id, { scanId, at: now, action });
       return [{ id: target.id, url: edionUrl(target.url), scanId, action }];
     });
@@ -89,40 +117,43 @@ export class EdionBrowserBridge {
     if (!this.enabled() || target.enabled === false) return { ignored: true };
     const observation = body.observation || {};
     if (edionUrl(observation.url) !== edionUrl(target.url)) throw new Error('分頁已離開設定的搜尋網址');
+    if (pending.action !== 'fetch' || observation.fetched !== true) throw new Error('缺少本次背景讀取證據，未更新基線');
     const root = this.root(); const previous = root.runtime[target.id] || {};
     const now = this.now(); const checkedAt = new Date(now).toISOString();
     const health = observation.health === 'verification_required' ? 'verification_required' : observation.health === 'ready' ? 'ready' : 'unreadable';
-    const runtime = { ...previous, health, checkedAt, nextObserveAt: new Date(now + 20_000).toISOString() };
+    const runtime = { ...previous, health, checkedAt, lastFetchAttemptAt: checkedAt,
+      httpStatus: Number(observation.httpStatus) || null, noManualRequired: true };
     if (health !== 'ready') {
       root.runtime[target.id] = runtime;
       runtime.failureCount = Number(previous.failureCount || 0) + 1;
-      runtime.nextReloadAt = new Date(now + Math.min(900_000, 60_000 * 2 ** Math.min(runtime.failureCount - 1, 4))).toISOString();
-      runtime.error = health === 'verification_required' ? '普通 Chrome 需人工驗證；保留分頁、不重整，完成後自動確認' : '普通 Chrome 尚未讀到商品；保留既有基線並降速';
+      const baseDelay = health === 'verification_required'
+        ? Math.min(3600000, 900000 * 2 ** Math.min(runtime.failureCount - 1, 2))
+        : Math.min(900000, 60000 * 2 ** Math.min(runtime.failureCount - 1, 4));
+      const retryAfterMs = Number.isFinite(Number(observation.retryAfterSeconds)) ? Math.max(0, Number(observation.retryAfterSeconds)) * 1000 : 0;
+      runtime.nextReloadAt = new Date(now + Math.min(8.64e15 - now, Math.max(baseDelay, retryAfterMs))).toISOString();
+      runtime.error = health === 'verification_required' ? '官網暫時受限；背景冷卻後自動重查，不需手動操作；庫存未更新' : '背景讀取未完成；自動重查，保留舊基線；庫存未更新';
+      runtime.alertStatus = 'disabled_no_manual_prompt';
       this.state.data.commerce.japanAuctions ||= { targets: {} };
       const targets = this.state.data.commerce.japanAuctions.targets ||= {};
       targets[target.id] = { ...(targets[target.id] || {}), lastError: runtime.error, lastErrorCode: health, lastAttemptAt: checkedAt };
-      // Persist once-per-episode alert before sending: an uncertain send must
-      // not become an endless reminder after process restart.
-      const alert = health === 'verification_required' && !previous.verificationEpisode;
-      if (health === 'verification_required') runtime.verificationEpisode = previous.verificationEpisode || checkedAt;
-      await this.state.save();
-      if (alert) {
-        this.log(`${target.name}：需人工驗證，已停止重整；同次阻擋只提醒一次。`);
-        try {
-          await this.notify(`🔐 愛電王需要人工驗證\n請開啟 Chrome 的「愛電王」監控分頁完成驗證。程式不會代解驗證，重新讀到商品後自動恢復。\n${target.url}`);
-          runtime.alertStatus = 'sent';
-        } catch (error) { runtime.alertStatus = 'failed_or_uncertain'; this.log(`愛電王人工驗證提醒失敗：${error.message}`); }
-        await this.state.save();
+      // Record the restriction without sending a "please verify" notification.
+      const newEpisode = health === 'verification_required' && !previous.verificationEpisode;
+      if (health === 'verification_required') {
+        runtime.verificationEpisode = previous.verificationEpisode || checkedAt;
+        if (newEpisode) {
+          runtime.verificationCount = now - Date.parse(previous.lastVerificationAt || '') < 86400000 ? Number(previous.verificationCount || 0) + 1 : 1;
+          runtime.lastVerificationAt = checkedAt;
+        }
       }
-      return { health, pauseReload: health === 'verification_required' };
+      await this.state.save();
+      if (previous.health !== health) this.log(`${target.name}：${runtime.error}。`);
+      return { health, pauseReload: true, nextCheckAt: runtime.nextReloadAt, noManualRequired: true };
     }
     const products = normalizeEdionProducts(observation.items);
     const result = await this.monitor.ingestBrowserProducts(target, products);
     Object.assign(runtime, { failureCount: 0, error: '', verificationEpisode: null, alertStatus: '',
-      nextReloadAt: pending.action === 'reload' || previous.health !== 'ready'
-        ? new Date(now + Math.max(60, Number(this.intervalSeconds()) || 60) * 1000).toISOString()
-        : previous.nextReloadAt,
-      lastHealthyAt: checkedAt });
+      nextReloadAt: new Date(now + this.reloadIntervalMs(runtime)).toISOString(),
+      lastHealthyAt: checkedAt, lastDataAt: checkedAt, dataTransport: 'chrome_first_party_http' });
     root.runtime[target.id] = runtime;
     await this.state.save();
     return { health: 'ready', result };
@@ -146,7 +177,7 @@ export class EdionBrowserBridge {
         if (extension) this.authenticate(request);
         if (request.url === '/edion-browser/pair') return this.pair();
         if (request.url === '/edion-browser/bridge/check') return { enabled: this.enabled() && (!body.id || this.getTargets().some(t => t.id === body.id && t.enabled !== false && t.sourceType === 'edion' && t.transport === 'chrome-bridge')) };
-        if (request.url === '/edion-browser/bridge/poll') { await this.state.save(); return { targets: this.plans(), enabled: this.enabled() }; }
+        if (request.url === '/edion-browser/bridge/poll') { await this.state.save(); return { targets: this.plans(body.protocol === 2 ? 2 : 0), enabled: this.enabled(), noManualRequired: true }; }
         if (request.url === '/edion-browser/bridge/report') return this.ingest(body);
         throw new Error('不存在的愛電王操作');
       });

@@ -2,6 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { AmazonOrderHistory } from './amazon-order-history.js';
 import { chromium } from 'playwright';
+import { waitForAmazonProductReady, amazonProductRecoveryDelay } from './amazon-jp-page-readiness.js';
+import { safePurchaseText } from './purchase-diagnostics.js';
+import { amazonThreeSteps } from './amazon-three-steps.js';
+import { canRecoverAmazonDirectIntent, nextAmazonPreSubmitRetry } from './amazon-pre-submit-retry.js';
+import { AmazonJpHttpClient, parseAmazonHttpCart, amazonOfferDecisionText } from './amazon-jp-http.js';
+import { openAmazonBrowserDirectEntry } from './amazon-browser-direct-entry.js';
 import {
   AMAZON_JP_SELLER_ID,
   amazonJapanPageIssue,
@@ -16,12 +22,14 @@ import {
   advanceAmazonJpCheckout,
   clickAndWaitForAmazonNavigation,
   firstVisible,
-  parseAmazonJpCheckoutSnapshot
+  readAmazonJpCheckoutSnapshot
 } from './amazon-jp-single-order.js';
 
 const LOGIN_PATH = /\/(?:ap\/signin|ap\/mfa|gp\/css\/homepage)/i;
 const PURCHASE_LIMIT_WORDS = /(?:已达到|已達到|已达|已達).*?(?:卖家|賣家).*?(?:采购|採購|购买|購買).*?(?:上限|限制)|購入数の上限|購入数量制限|maximum purchase quantity/i;
 export const AMAZON_PRODUCT_POLL_MS = 5_000;
+export const AMAZON_FAST_POLL_MS = 2_000;
+export const AMAZON_A_FAST_POLL_MS = AMAZON_FAST_POLL_MS; // Compatibility with existing local callers.
 
 export function normalizeAmazonJpProductMode(value) {
   return value === 'hybrid' ? 'hybrid' : 'scan_signal';
@@ -48,6 +56,7 @@ export function resolveAmazonJpMsrp({ asin, title, catalog = [], manualProducts 
 }
 
 export function evaluateAmazonJpProductOrder(snapshot, msrp, toleranceYen = 1) {
+  if (snapshot.pageIssue === 'human_verification') return { eligible: false, reason: 'verification_required' };
   if (snapshot.pageIssue === 'rate_limited') return { eligible: false, reason: 'rate_limited' };
   if (snapshot.pageIssue === 'not_found') return { eligible: false, reason: 'page_not_found' };
   // Only explicit Amazon login evidence may stop the task. A blank account
@@ -76,16 +85,34 @@ export function matchesAmazonJpPurchaseSignal(config, product, { source, kind } 
     && isAmazonPriceWithinMsrp(product?.priceYen, product?.msrpYen, config.priceToleranceYen ?? 1);
 }
 
+export function validateAmazonJpProductCheckout(checkout, { asin, code, msrpYen, toleranceYen = 1, maxShippingYen = 500 } = {}) {
+  let url;
+  try { url = new URL(checkout.url); } catch { throw new Error('日亞結帳網址無法核對，不送單'); }
+  if (url.protocol !== 'https:' || !/^(?:www\.)?amazon\.co\.jp$/i.test(url.hostname)
+    || !/\/(?:checkout\/|gp\/buy\/)/i.test(url.pathname)) throw new Error('不是日亞官方結帳頁，不送單');
+  if (checkout.itemCount !== 1 || checkout.quantity !== 1 || checkout.stockLimited) throw new Error('日亞送單前商品／數量核對失敗，必須只有目標商品 1 件');
+  if (checkout.asin !== asin || checkout.asins?.some(value => value !== asin) || code && checkout.code !== code) throw new Error('日亞結帳商品與目標不符，不送單');
+  if (!checkout.sellerConfirmed) throw new Error('日亞送單前無法確認自營賣家，不送單');
+  if (!checkout.deliveryConfirmed) throw new Error('日亞送單前未確認收件配送資料，不送單');
+  if (!Number.isFinite(checkout.shippingYen) || checkout.shippingYen < 0 || checkout.shippingYen > maxShippingYen) throw new Error(`日亞運費未確認或超過 ¥${maxShippingYen}，不送單`);
+  if (!Number.isFinite(checkout.totalYen) || checkout.totalYen <= checkout.shippingYen
+    || !isAmazonPriceWithinMsrp(checkout.totalYen - checkout.shippingYen, msrpYen, toleranceYen)) throw new Error('日亞含運總額未確認或商品金額超過原價，不送單');
+  return { totalYen: checkout.totalYen, shippingYen: checkout.shippingYen };
+}
+
 export class AmazonJpProductOrderMonitor {
-  constructor({ dataDir, state, getConfig, slot = 'A', storageKey, profileName, onTerminal = async () => {}, notifyPrivate = async () => {}, log = () => {}, orderHistory, checkoutRunner = advanceAmazonJpCheckout, persistentContextLauncher = (userDataDir, options) => chromium.launchPersistentContext(userDataDir, options) }) {
+  constructor({ dataDir, state, getConfig, slot = 'A', storageKey, profileName, onTerminal = async () => {}, notifyPrivate = async () => {}, log = () => {}, orderHistory, checkoutRunner = advanceAmazonJpCheckout, httpClientFactory = options => new AmazonJpHttpClient(options), persistentContextLauncher = (userDataDir, options) => chromium.launchPersistentContext(userDataDir, options) }) {
     this.state = state;
     this.getConfig = getConfig;
     this.onTerminal = onTerminal;
+    this.raceCoordinator = null;
+    this.activeRaceLease = null;
     this.notifyPrivate = notifyPrivate;
     this.log = log;
     this.slot = String(slot || 'A').toUpperCase();
     this.storageKey = storageKey || 'amazonJpProductOrder';
     this.checkoutRunner = checkoutRunner;
+    this.httpClientFactory = httpClientFactory;
     this.persistentContextLauncher = persistentContextLauncher;
     this.profileDirectory = path.join(dataDir, 'auto-purchase', 'browser-profiles', profileName || `amazon-jp-product-order-${this.slot.toLowerCase()}`);
     this.context = null;
@@ -104,19 +131,90 @@ export class AmazonJpProductOrderMonitor {
     this.orderHistory = orderHistory || new AmazonOrderHistory(dataDir, { log });
     this.activeOrderRecord = null;
     this.currentScanSteps = [];
+    this.directIdleOrderBaseline = null;
+    this.stepLog = [];
+    this.refreshCount = 0;
+    this.signalChecks = [];
+    this.maintenancePollCount = 0;
   }
 
   mode() { return normalizeAmazonJpProductMode(this.getConfig()?.mode); }
+
+  transport() { return this.getConfig()?.checkoutTransport === 'browser' ? 'browser' : 'api'; }
+
+  fastLaneEnabled() { return ['A', 'B', 'C'].includes(this.slot) && this.transport() === 'api' && this.getConfig()?.fastLane === true; }
+
+  browserEntryFallbackActive() {
+    const fallback = this.storage().checkoutEntryFallback;
+    return this.fastLaneEnabled() && fallback?.asin === extractAmazonAsin(this.getConfig()?.targetUrl)
+      && Date.parse(fallback.until || '') > Date.now();
+  }
+
+  pollIntervalMs() { return this.fastLaneEnabled() ? AMAZON_FAST_POLL_MS : AMAZON_PRODUCT_POLL_MS; }
+
+  targetProduct() {
+    const asin = extractAmazonAsin(this.getConfig()?.targetUrl);
+    if (!asin) return { asin: '', title: '', code: '', titleSource: '' };
+    const snapshot = this.storage().lastSnapshot;
+    const amazon = this.amazonStorage();
+    const manual = amazon.manualProducts?.[asin];
+    const known = amazon.products?.[asin];
+    for (const [source, item] of [['quote', snapshot?.asin === asin ? snapshot : null], ['database', manual], ['baseline', known]]) {
+      const title = clean(item?.title).slice(0, 400);
+      if (title) return { asin, title, code: clean(item.code || extractModelCode(title)), titleSource: source };
+    }
+    return { asin, title: '', code: '', titleSource: '' };
+  }
+
+  async saveApiCheckpoint() {
+    // Await real durable writes without paying the shared 350ms debounce at
+    // every API stage. Keep the StateStore serialization/atomic rename queue.
+    if (this.transport() === 'api' && typeof this.state.writeSnapshot === 'function') return this.state.writeSnapshot();
+    return this.state.save();
+  }
+
+  hasPendingApiTransaction() {
+    const tx = this.storage().apiTransaction;
+    return Boolean(tx && !tx.accounted);
+  }
+
+  canRecoverPreSubmit(submitted = false) {
+    return canRecoverAmazonDirectIntent({ transaction: this.storage().apiTransaction,
+      asin: extractAmazonAsin(this.getConfig()?.targetUrl), fastLane: this.fastLaneEnabled() && this.transport() === 'api', submitted,
+      raceState: this.raceCoordinator?.current(this.slot)?.routes.api?.state });
+  }
+
+  async recoverPreSubmit({ submitted = false, minimumDelayMs = 0, recordRetry = true } = {}) {
+    if (!this.canRecoverPreSubmit(submitted)) return false;
+    const storage = this.storage(), tx = storage.apiTransaction, previous = storage.preSubmitRetry;
+    minimumDelayMs = Math.max(minimumDelayMs, (Date.parse(storage.backoffUntil || '') || 0) - Date.now());
+    const retry = nextAmazonPreSubmitRetry(previous, { asin: tx.asin, minimumDelayMs });
+    delete storage.apiTransaction;
+    storage.preSubmitRetry = retry;
+    if (!['needs_login', 'needs_verification'].includes(storage.status)) storage.status = this.getConfig()?.enabled ? this.waitingStatus() : 'idle';
+    // Do not clear a cart, touch another route, reuse a checkout form, or alter
+    // enabled settings. Next attempt starts from a fresh validated product GET.
+    this.setBackoff(retry.delayMs);
+    try { await this.saveApiCheckpoint(); }
+    catch (error) {
+      storage.apiTransaction = tx; storage.preSubmitRetry = previous;
+      storage.status = 'needs_review'; this.stop(); throw error;
+    }
+    if (recordRetry) await this.recordStep('pre_submit_retry', { retryCount: retry.attempts, retryDelayMs: retry.delayMs });
+    return retry;
+  }
 
   waitingStatus() { return this.mode() === 'hybrid' ? 'waiting_poll' : 'waiting_signal'; }
 
   assertIdle() {
     if (this.running || this.browserOperation) throw new Error('商品頁正在檢查或結帳，請等本次完成後再變更設定／開啟登入視窗');
+    if (['preparing', 'granted'].includes(this.raceCoordinator?.current(this.slot)?.routes.frontend?.state)) throw new Error('插件正在結帳，暫不變更帳號／工作階段');
   }
 
   canSchedule() {
     return !this.stopped && this.getConfig()?.enabled && !this.interactive && !this.browserOperation
-      && !['completed', 'needs_review', 'needs_login'].includes(this.storage().status);
+      && !this.hasPendingApiTransaction()
+      && !['completed', 'needs_review', 'needs_login', 'needs_verification'].includes(this.storage().status);
   }
 
   rearm() {
@@ -125,7 +223,7 @@ export class AmazonJpProductOrderMonitor {
     if (this.pendingSignal) this.scheduleNext(cooldown);
     else if (this.mode() === 'hybrid') {
       // Start-to-start target; slow requests never overlap or create catch-up bursts.
-      const delay = Math.max(250, AMAZON_PRODUCT_POLL_MS - (Date.now() - this.taskClock));
+      const delay = Math.max(250, this.pollIntervalMs() - (Date.now() - this.taskClock));
       this.scheduleNext(Math.max(delay, cooldown));
     }
   }
@@ -137,10 +235,10 @@ export class AmazonJpProductOrderMonitor {
 
   storage() {
     this.state.data.commerce ||= {};
-    this.state.data.commerce[this.storageKey] ||= { status: 'idle', refreshCount: 0, stepLog: [] };
+    this.state.data.commerce[this.storageKey] ||= { status: 'idle' };
     const storage = this.state.data.commerce[this.storageKey];
     storage.completedCount = Math.max(0, Number(storage.completedCount) || 0);
-    storage.stepLog = Array.isArray(storage.stepLog) ? storage.stepLog.slice(-60) : [];
+    for (const key of ['stepLog', 'refreshCount', 'signalChecks', 'lastIdleCartCheckCount']) delete storage[key];
     return storage;
   }
 
@@ -150,7 +248,14 @@ export class AmazonJpProductOrderMonitor {
   }
 
   async recordStep(name, detail = {}) {
-    const storage = this.storage();
+    if(this.transport()==='browser'&&this.activeOrderRecord){
+      if(['buy_now_click','proceed_checkout','checkout_inspect','checkout_verified'].includes(name)&&!this.browserEvidenceStarted){
+        this.browserEvidenceStarted=true;await this.captureBrowserEvidence('entry');
+      }
+      if(['checkout_inspect','checkout_verified'].includes(name)&&!this.browserEvidenceResponse){
+        this.browserEvidenceResponse=true;await this.captureBrowserEvidence('response');
+      }
+    }
     const now = Date.now();
     const step = {
       name,
@@ -158,29 +263,60 @@ export class AmazonJpProductOrderMonitor {
       elapsedMs: this.taskClock ? now - this.taskClock : 0,
       ...detail
     };
-    storage.stepLog.push(step);
     this.currentScanSteps.push(step);
     this.currentScanSteps = this.currentScanSteps.slice(-60);
+    this.stepLog = amazonThreeSteps([...this.stepLog, step]).slice(-60);
+    // Poll/transport telemetry must not introduce disk checkpoints on the hot
+    // path. Durable purchase intent is saved separately before each mutation.
+    if (this.fastLaneEnabled() && ['api_request_complete', 'refresh_start', 'product_evaluated'].includes(name)) {
+      return;
+    }
     if (this.activeOrderRecord) await this.orderHistory.step(this.activeOrderRecord, step);
-    storage.stepLog = storage.stepLog.slice(-60);
-    await this.state.save();
+    await this.saveApiCheckpoint();
+  }
+
+  async captureBrowserEvidence(kind,error) {
+    if(!this.activeOrderRecord || typeof this.orderHistory.captureEvidence!=='function' || typeof this.page?.screenshot!=='function')return;
+    try {
+      const image=await this.page.screenshot({type:'png',fullPage:true,timeout:2000});
+      this.orderHistory.captureEvidence(this.activeOrderRecord,kind,{image,source:kind==='entry'?'專用瀏覽器入口畫面；未證明安全結帳已載入':'專用瀏覽器實際畫面',url:this.page.url(),error:error?.message,errorCode:error?.code});
+    } catch(captureError) {
+      this.orderHistory.captureEvidence(this.activeOrderRecord,kind,{source:'瀏覽器截圖未取得；僅保存錯誤說明',captureError:captureError.message,error:error?.message||captureError.message,errorCode:error?.code});
+    }
+  }
+
+  clearDiagnostics() {
+    // Do not touch in-flight purchase evidence, transaction locks, success
+    // counts, cooldowns or the independent 500-poll maintenance cadence.
+    this.stepLog = [];
+    this.refreshCount = 0;
+    this.signalChecks = [];
+    this.storage();
   }
 
   async resetProgress() {
     this.assertIdle();
+    if (this.hasPendingApiTransaction()) throw new Error('日亞 API 留有未核對交易，不能用重設清除；請先查官方訂單／購物車');
     this.stop();
     this.failureCount = 0;
+    this.clearDiagnostics();
+    delete this.storage().preSubmitRetry;
+    delete this.storage().checkoutEntryFallback;
+    this.maintenancePollCount = 0;
     const storage = this.storage();
     Object.assign(storage, {
       completedCount: 0,
-      refreshCount: 0,
       status: 'idle',
       lastError: '',
       lastErrorNotifiedKey: '',
-      taskStartedAt: new Date().toISOString(),
-      stepLog: []
+      taskStartedAt: new Date().toISOString()
     });
     for (const key of ['lastCheckedAt', 'lastSnapshot', 'triggeredAt', 'lastOrderStatus', 'lastOrderAt', 'resultUrl', 'completedAt', 'lastFailureNotifiedAt', 'targetAsin', 'lastSignalSource', 'lastSignalMatchedAt', 'lastSignalF5LatencyMs', 'lastSignalKind', 'lastSignalPriceYen', 'backoffUntil', 'lastTrigger']) delete storage[key];
+    delete storage.pageRecoveryCount;
+    delete storage.lastPageDiagnostic;
+    delete storage.orderHistoryCheck;
+    delete storage.loginIssueScope;
+    this.directIdleOrderBaseline = null;
     await this.state.save();
   }
 
@@ -220,8 +356,33 @@ export class AmazonJpProductOrderMonitor {
       { name: 'lc-main', value: 'ja_JP', domain: '.amazon.co.jp', path: '/' }
     ]);
     this.headless = headless;
-    this.context.once('close', () => { this.context = null; this.page = null; this.headless = null; });
+    const context = this.context;
+    context.once('close', () => {
+      if (this.context !== context) return;
+      const wasInteractive = this.interactive;
+      this.context = null; this.page = null; this.headless = null; this.interactive = false;
+      if (wasInteractive) {
+        this.stop();
+        const storage = this.storage();
+        if (!['needs_review', 'needs_verification', 'completed', 'purchase_limited'].includes(storage.status)) storage.status = 'needs_login';
+        storage.lastError = '專用視窗已關閉；按「檢查」會重新開啟並核對已保存的登入。';
+      }
+    });
     return this.context;
+  }
+
+  findInteractivePage() {
+    const targetAsin = extractAmazonAsin(this.getConfig()?.targetUrl);
+    const official = page => {
+      try { return !page.isClosed() && new URL(page.url()).origin === 'https://www.amazon.co.jp'; }
+      catch { return false; }
+    };
+    let pages = [];
+    try { pages = this.context?.pages?.() || []; } catch { /* closed context: reopen the same saved profile */ }
+    const target = pages.find(page => official(page) && extractAmazonAsin(page.url()) === targetAsin);
+    // Rebind only within THIS account's BrowserContext, never ordinary Chrome
+    // or a different task's profile. Login can replace/close its original tab.
+    return target || (this.page && !this.page.isClosed() ? this.page : null) || pages.find(official) || null;
   }
 
   async pageFor(headless) {
@@ -231,6 +392,7 @@ export class AmazonJpProductOrderMonitor {
   }
 
   async productSnapshot(page, status = 200) {
+    const readiness = await waitForAmazonProductReady(page, status);
     // Missing prices/buttons are normal when sold out. Read one DOM snapshot,
     // never await four absent locators (4 x the default 30-second timeout).
     let deadline;
@@ -248,6 +410,7 @@ export class AmazonJpProductOrderMonitor {
           const prices = ['#corePrice_feature_div .a-price .a-offscreen', '#apex_desktop .priceToPay .a-offscreen', '#apex_desktop .a-price .a-offscreen', '#desktop_buybox .a-price .a-offscreen'];
           return {
             bodyText: document.body?.innerText || '', pageTitle: document.title,
+            captchaPresent: Boolean(document.querySelector('#captchacharacters, form[action*="validateCaptcha"], input[name="cvf_captcha_input"]')),
             title: text('#productTitle'),
             accountText: text('#nav-link-accountList-nav-line-1, #nav-link-accountList .nav-line-1'),
             priceText: prices.map(text).find((value) => value.trim()) || '',
@@ -272,7 +435,10 @@ export class AmazonJpProductOrderMonitor {
     const priceText = clean(raw.priceText);
     const sellerConfirmed = merchantValues.some((value) => value.includes(AMAZON_JP_SELLER_ID))
       || /(?:販売元|出品者|卖家|賣家|Seller)\s*[:：]?\s*(?:Amazon\.co\.jp|アマゾンジャパン)/i.test(bodyText);
-    const pageIssue = amazonJapanPageIssue({ status, title: pageTitle, body: bodyText, html: bodyText }) || (!title ? 'product_unreadable' : '');
+    const pageIssue = raw.captchaPresent || /Robot Check|Enter the characters you see|画像に表示されている文字/i.test(`${pageTitle} ${bodyText}`)
+      ? 'human_verification'
+      : amazonJapanPageIssue({ status, title: pageTitle, body: bodyText, html: bodyText })
+        || (!title || readiness.state === 'time_limit' && (!priceText || !buyNowAvailable && !addCartAvailable) ? 'product_unreadable' : '');
     return {
       url: page.url(),
       asin: extractAmazonAsin(page.url()) || extractAmazonAsin(this.getConfig()?.targetUrl),
@@ -287,18 +453,127 @@ export class AmazonJpProductOrderMonitor {
       accountText,
       signedIn,
       loginRequired: LOGIN_PATH.test(page.url()) || loginWords.test(accountText) || loginWords.test(pageTitle) && !title,
-      pageIssue
+      pageIssue,
+      diagnostic: { httpStatus: Number(status) || 0, pageTitle: safePurchaseText(pageTitle, 120),
+        bodyLength: bodyText.length, hasProductTitle: Boolean(title), hasPrice: Boolean(priceText),
+        hasBuyButton: Boolean(buyNowAvailable || addCartAvailable), readiness }
     };
   }
 
   async checkoutSnapshot(page) {
-    const titles = await page.locator('[id^="item-block-product-title-"]:visible, [id^="checkout-item-block-item-primary-title-"]:visible, .lineitem-title-text:visible').allTextContents().catch(() => []);
-    const quantityText = await page.locator('[data-a-selector="inner-value"]').first().textContent().catch(() => '');
-    const asins = await page.locator('a[href*="/dp/"], a[href*="/gp/product/"]').evaluateAll((links) => links.map((link) => link.href)).catch(() => []);
-    const bodyText = await page.locator('body').innerText().catch(() => '');
-    const sellerLinkConfirmed = await page.locator(`a[href*="seller=${AMAZON_JP_SELLER_ID}"]`).count().catch(() => 0) > 0;
-    const sellerTextConfirmed = /(?:卖家|賣家|販売元|出品者|Seller)\s*[:：]?\s*(?:Amazon\.co\.jp|アマゾンジャパン)/i.test(bodyText);
-    return parseAmazonJpCheckoutSnapshot({ url: page.url(), bodyText, titles, quantityText, asins, sellerConfirmed: sellerLinkConfirmed || sellerTextConfirmed });
+    return readAmazonJpCheckoutSnapshot(page);
+  }
+
+  async httpClient() {
+    const context = await this.contextFor(!this.interactive);
+    return this.httpClientFactory({ request: context.request, parallelPreflight: false, fastCheckout: this.fastLaneEnabled(), directBuyNow: this.fastLaneEnabled(),
+      browserDirectEntry: this.browserEntryFallbackActive()
+        ? async (snapshot, options) => {
+          await this.recordStep('checkout_browser_entry', { step: 2 });
+          return openAmazonBrowserDirectEntry(await this.pageFor(!this.interactive), snapshot, options);
+        } : null,
+      captureEvidence:(kind,input)=>{if(this.activeOrderRecord && typeof this.orderHistory.captureEvidence==='function')this.orderHistory.captureEvidence(this.activeOrderRecord,kind,input);},
+      // Another route can create an identical order. Never attribute its new
+      // order-list entry to this API send; require this route's own completion.
+      idleOrderBaseline: this.raceCoordinator?.connected(this.slot) || this.raceCoordinator?.current(this.slot) ? null : this.directIdleOrderBaseline,
+      authorizeFinalSubmit: async () => { if (this.activeRaceLease) await this.raceCoordinator.grant(this.activeRaceLease); },
+      canContinue: () => !this.stopped && Boolean(this.getConfig()?.enabled)
+        && extractAmazonAsin(this.getConfig()?.targetUrl) === this.storage().targetAsin
+        && (!this.activeRaceLease || this.raceCoordinator.canContinue(this.activeRaceLease))
+        && (this.phase !== 'maintenance' || !this.pendingSignal && !this.raceCoordinator?.maintenanceBlocked()),
+      recordStep: (name, detail) => this.recordStep(name, detail),
+      checkpoint: async transaction => {
+        if (transaction) this.storage().apiTransaction = { ...transaction };
+        else delete this.storage().apiTransaction;
+        await this.saveApiCheckpoint();
+      }
+    });
+  }
+
+  async reconcileApiOrder() {
+    if (this.running || this.browserOperation || this.interactive) return { skipped: true, reason: 'task_busy' };
+    const storage = this.storage(), transaction = storage.apiTransaction;
+    if ((Date.parse(storage.backoffUntil || '') || 0) > Date.now()) {
+      return { skipped: true, reason: 'cooling_down', message: '官方要求降速，期限未到；本次不查單、不重送。' };
+    }
+    if (!transaction || transaction.accounted || !['submitted', 'confirmed'].includes(transaction.phase)) {
+      return { skipped: true, reason: 'cart_needs_manual_review', message: '尚未送單，但購物車／加車結果需人工核對；不再加車、不自動送單。' };
+    }
+    this.running = true; this.phase = 'reconciling'; this.taskClock = Date.now();
+    this.currentScanSteps = [];
+    try {
+      const client = await this.httpClient();
+      const result = await client.confirmOrder(transaction);
+      if (result.status === 'ordered') {
+        storage.completedCount += 1;
+        transaction.accounted = true; transaction.phase = 'confirmed'; transaction.orderId = result.snapshot.orderId;
+        storage.lastOrderStatus = 'ordered'; storage.resultUrl = result.snapshot.url;
+        const complete = storage.completedCount >= Math.max(1, Number(this.getConfig()?.targetSuccessCount) || 1);
+        storage.status = complete ? 'completed' : this.waitingStatus(); storage.lastError = '';
+        await this.state.save();
+        await this.recordStep('submit_result', { status: 'ordered', orderId: result.snapshot.orderId });
+        // Recovery has no new POST, but needs its own permanent evidence record.
+        const record = await this.orderHistory.begin({ slot: this.slot, mode: this.mode(), trigger: 'api_reconciliation',
+          scanStartedAt: new Date(this.taskClock).toISOString(), snapshot: transaction, steps: this.currentScanSteps, compactSteps: true });
+        await this.orderHistory.finish(record, { status: 'ordered', orderId: result.snapshot.orderId });
+        await this.sendPrivateAndRecord(`✅ 日亞 API 查單確認成立｜${transaction.title || transaction.asin}｜訂單 ${result.snapshot.orderId}｜本次只查單，沒有重送`, 'success');
+        if (complete) { this.stop(); await this.onTerminal(result); }
+      } else {
+        await this.recordStep('submit_result', { status: 'submitted_unconfirmed' });
+        storage.status = 'needs_review'; storage.lastError = '官方訂單仍無法唯一核對；不重送、不清車'; await this.state.save();
+      }
+      return result;
+    } finally { this.running = false; this.phase = 'idle'; this.rearm(); }
+  }
+
+  async prepareDirectIdleBaseline(client) {
+    if (!this.fastLaneEnabled() || this.hasPendingApiTransaction() || this.interactive || this.pendingSignal
+      || this.stopped || !this.getConfig()?.enabled || typeof client.readIdleOrderBaseline !== 'function') return;
+    const asin = extractAmazonAsin(this.getConfig()?.targetUrl);
+    const check = this.storage().orderHistoryCheck;
+    if (check?.asin === asin && (['needs_login', 'needs_verification'].includes(check.status)
+      || Date.parse(check.nextCheckAt || '') > Date.now())) return;
+    try {
+      const baseline = await client.readIdleOrderBaseline(asin);
+      if (!this.stopped && !this.hasPendingApiTransaction() && extractAmazonAsin(this.getConfig()?.targetUrl) === asin) {
+        this.directIdleOrderBaseline = baseline;
+        this.storage().orderHistoryCheck = { asin, scope: 'order_history', status: 'ready', at: new Date().toISOString() };
+      }
+    } catch (error) {
+      this.directIdleOrderBaseline = null; // Unknown history is NOT an empty baseline.
+      const auth = error.code === 'AMAZON_LOGIN_REQUIRED' ? 'needs_login'
+        : error.code === 'AMAZON_VERIFICATION_REQUIRED' ? 'needs_verification' : '';
+      this.storage().orderHistoryCheck = { asin, scope: 'order_history', status: auth || 'unavailable',
+        at: new Date().toISOString(), code: error.code || 'UNKNOWN',
+        message: auth === 'needs_login' ? '背景查單需再次登入；僅暫停背景查單'
+          : auth === 'needs_verification' ? '背景查單待人工驗證；僅暫停背景查單' : '背景查單暫不可用；商品登入另行核對',
+        ...(!auth ? { nextCheckAt: new Date(Date.now() + Math.max(300_000, error.retryAfterMs || 0)).toISOString() } : {}) };
+      await this.state.save();
+      // A genuine site rate limit still applies to the account's requests.
+      if (error.code === 'AMAZON_RATE_LIMITED') throw error;
+      // Only this auxiliary operation is suspended. Never change purchase
+      // login state or notify "login failed" for an optional history check.
+    }
+  }
+
+  async confirmApiCartReviewed() {
+    this.assertIdle();
+    if (this.interactive) throw new Error('請先完成登入檢查，再核對購物車');
+    const storage = this.storage(), tx = storage.apiTransaction;
+    if ((Date.parse(storage.backoffUntil || '') || 0) > Date.now()) throw new Error('官方降速期限未到，暫不查車');
+    if (tx && !tx.accounted && ['submitted', 'confirmed'].includes(tx.phase)) throw new Error('曾進入送單階段，不能用清車解除；必須先查官方訂單');
+    if (storage.status !== 'needs_review') throw new Error('目前沒有需要人工核對的購物車');
+    this.running = true; this.phase = 'inspecting';
+    try {
+      const client = await this.httpClient();
+      const cart = await client.request('/-/zh/gp/cart/view.html?ref_=nav_cart');
+      if (!parseAmazonHttpCart(cart).empty) throw new Error('購物車仍有商品，或官方回應不足以確認空車；尚未解除。請先到此任務專用瀏覽器核對並移除測試商品，再按「檢查」。本次沒有清車或送單。');
+      delete storage.apiTransaction;
+      storage.status = this.getConfig()?.enabled ? this.waitingStatus() : 'idle'; storage.lastError = '';
+      await this.recordStep('api_cart_empty', { step: 2, result: 'manual_cart_reviewed' });
+      await this.state.save();
+      return { message: '已從 API 確認空車，待核對已解除；本次沒有加車／送單。若任務已停止，請重新勾選「啟動」才會搶購。' };
+    } finally { this.running = false; this.phase = 'idle'; this.rearm(); }
   }
 
   resolveMsrp(snapshot) {
@@ -313,28 +588,72 @@ export class AmazonJpProductOrderMonitor {
 
   async openLogin() {
     this.assertIdle();
-    const targetUrl = normalizeAmazonJpProductUrl(this.getConfig()?.targetUrl);
     this.stop();
+    const existing = this.interactive || this.headless === false ? this.findInteractivePage() : null;
+    if (existing) {
+      this.page = existing;
+      this.interactive = true;
+      await this.page.bringToFront();
+      return { message: '此任務的專用視窗已開啟；完成登入／驗證後，請按「檢查」。本次沒有重新載入頁面或送單。' };
+    }
+    const targetUrl = normalizeAmazonJpProductUrl(this.getConfig()?.targetUrl);
     this.browserOperation = true;
     try {
       await this.closeBrowser();
       const page = await this.pageFor(false);
       this.interactive = true;
       await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 30_000 });
-      return { message: '日亞商品頁專用視窗已開啟；登入期間暫停自動刷新，完成登入檢查後依所選模式恢復。' };
+      return { message: '日亞商品頁專用視窗已開啟；登入期間暫停自動刷新，完成登入／驗證後，請按「檢查」恢復原任務。' };
     } finally { this.browserOperation = false; }
+  }
+
+  // One UI action for inspection/recovery. Never calls purchase=true or clears
+  // a cart. Existing enabled scheduling resumes only through its normal locks.
+  async check() {
+    this.assertIdle();
+    if (this.canRecoverPreSubmit()) {
+      const retry = await this.recoverPreSubmit();
+      this.storage().lastError = ''; this.rearm();
+      return { message: `已確認紀錄停在最終送單之前，解除舊直購流程；${Math.ceil(retry.delayMs / 1000)} 秒後依原啟用設定繼續。本次未清車、未購買、未送單。` };
+    }
+    if (this.interactive) return this.completeLogin();
+    if (['needs_login', 'needs_verification'].includes(this.storage().status)) return this.completeLogin();
+    if (this.hasPendingApiTransaction()) {
+      if (['submitted', 'confirmed'].includes(this.storage().apiTransaction.phase)) return this.reconcileApiOrder();
+      return this.confirmApiCartReviewed();
+    }
+    try { return await this.scanOnce({ purchase: false }); }
+    catch (error) {
+      if (['AMAZON_LOGIN_REQUIRED', 'AMAZON_VERIFICATION_REQUIRED'].includes(error.code)) return this.openLogin();
+      throw error;
+    }
   }
 
   async completeLogin() {
     this.assertIdle();
-    if (!this.interactive || !this.page || this.page.isClosed()) throw new Error('目前沒有日亞商品頁登入視窗，請先按「開啟專用視窗」');
+    if (this.interactive) this.page = this.findInteractivePage();
+    if (!this.interactive || !this.page) await this.openLogin();
     this.browserOperation = true;
     try {
     const snapshot = await this.productSnapshot(this.page);
+    if (snapshot.pageIssue === 'human_verification') return { ok: false, message: '目前仍為人工驗證頁，請在專用視窗完成驗證，系統不會自動重試驗證。' };
+    // Authentication does not require stock, a price, or a Buy Now button.
+    // A sold-out product can time out the OFFER wait while login is valid.
+    let officialProduct = false;
+    try { officialProduct = new URL(snapshot.url).origin === 'https://www.amazon.co.jp'
+      && extractAmazonAsin(snapshot.url) === extractAmazonAsin(this.getConfig()?.targetUrl); } catch { /* not an official product */ }
+    const loginProductReady = officialProduct && snapshot.title && snapshot.signedIn === true && !snapshot.loginRequired
+      && extractAmazonAsin(snapshot.url) === extractAmazonAsin(this.getConfig()?.targetUrl)
+      && snapshot.diagnostic?.httpStatus === 200 && snapshot.diagnostic?.hasProductTitle;
+    if (snapshot.pageIssue && !(snapshot.pageIssue === 'product_unreadable' && loginProductReady)) return { ok: false, message: '商品頁尚未取得完整資料，不能判定登入驗證成功；視窗會保持開啟。' };
     if (snapshot.loginRequired || !snapshot.signedIn) return { ok: false, message: `尚未辨識到日亞帳號登入完成${snapshot.accountText ? `（目前顯示：${snapshot.accountText}）` : ''}；請按右上角登入，視窗會保持開啟。` };
-    if (!snapshot.asin) return { ok: false, message: '已登入，但目前不是 Amazon.co.jp 商品頁。' };
+    if (!officialProduct) return { ok: false, message: '已登入，請在專用視窗回到本任務商品頁後按「檢查」。' };
     const storage = this.storage();
     storage.loginVerifiedAt = new Date().toISOString();
+    storage.lastError = ''; storage.lastFailureCode = ''; storage.lastErrorNotifiedKey = '';
+    delete storage.loginIssueScope;
+    delete storage.orderHistoryCheck;
+    if (['needs_login', 'needs_verification'].includes(storage.idleCartMaintenance?.status)) delete storage.idleCartMaintenance;
     if (storage.status !== 'needs_review') storage.status = 'ready';
     await this.state.save();
     this.interactive = false;
@@ -357,10 +676,11 @@ export class AmazonJpProductOrderMonitor {
     if (storage.completedCount >= Math.max(1, Number(config.targetSuccessCount) || 1)) {
       return { matched: true, queued: false, reason: 'already_completed' };
     }
-    if (storage.status === 'needs_review') {
+    if (storage.status === 'needs_review' || this.hasPendingApiTransaction()) {
       return { matched: true, queued: false, reason: 'order_needs_review' };
     }
     if (storage.status === 'needs_login') return { matched: true, queued: false, reason: 'login_required' };
+    if (storage.status === 'needs_verification') return { matched: true, queued: false, reason: 'verification_required' };
     if (this.pendingSignal || storage.status === 'ordering') {
       return { matched: true, queued: false, reason: 'already_processing_signal' };
     }
@@ -409,6 +729,7 @@ export class AmazonJpProductOrderMonitor {
 
   async scanOnce({ purchase = false, signal = null, trigger = 'manual' } = {}) {
     if (this.running || this.browserOperation) return { skipped: true };
+    if (this.hasPendingApiTransaction()) return { skipped: true, reason: 'order_needs_review' };
     if (this.storage().status === 'needs_review') return { skipped: true, reason: 'order_needs_review' };
     if (purchase && (!this.canSchedule() || this.storage().status === 'ordering')) return { skipped: true, reason: 'task_paused' };
     if (this.timer) clearTimeout(this.timer);
@@ -420,6 +741,7 @@ export class AmazonJpProductOrderMonitor {
     this.currentScanSteps = [];
     this.activeOrderRecord = null;
     const storage = this.storage();
+    let apiClient;
     let submitted = false;
     let attemptedPurchase = false;
     try {
@@ -441,21 +763,29 @@ export class AmazonJpProductOrderMonitor {
       const cooldown = (Date.parse(storage.backoffUntil || '') || 0) - Date.now();
       if (cooldown > 0) return { skipped: true, reason: 'cooling_down' };
       storage.lastTrigger = signal ? 'scan_signal' : polling ? 'poll' : 'manual';
-      const page = await this.pageFor(!this.interactive);
+      let page;
+      let snapshot;
       if (signal) storage.lastSignalF5LatencyMs = Math.max(0, Date.now() - signal.matchedAt);
-      await this.recordStep('refresh_start', { asin: extractAmazonAsin(targetUrl) });
+      await this.recordStep('refresh_start', { asin: targetAsin, step: 1, transport: this.transport() });
+      if (this.transport() === 'api') {
+        apiClient = await this.httpClient();
+        snapshot = this.fastLaneEnabled() && typeof apiClient.readDirectOffer === 'function'
+          ? await apiClient.readDirectOffer(targetAsin) : await apiClient.readOffer(targetAsin);
+      } else {
+      page = await this.pageFor(!this.interactive);
       const response = page.url() === targetUrl
         ? await page.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 })
         : await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: 15_000 });
       if ([429, 503].includes(response?.status())) {
+        storage.lastPageDiagnostic = { httpStatus: response.status(), readiness: { state: 'http_rejected', waitedMs: 0 } };
         const retryAfter = response.headers?.()['retry-after'];
         const seconds = Number(retryAfter);
         const retryMs = Number.isFinite(seconds) ? seconds * 1000 : Date.parse(retryAfter || '') - Date.now();
         this.setBackoff(Math.max(60_000, Number.isFinite(retryMs) ? retryMs : 0));
         throw Object.assign(new Error(`Amazon.co.jp HTTP ${response.status()}，已降速等待後重試`), { code: 'AMAZON_RATE_LIMITED' });
       }
-      await page.waitForTimeout(250);
-      const snapshot = await this.productSnapshot(page, response?.status() || 200);
+      snapshot = await this.productSnapshot(page, response?.status() || 200);
+      }
       const msrp = this.resolveMsrp(snapshot);
       const productMismatch = snapshot.asin !== targetAsin
         || Boolean(signal?.code && snapshot.code && signal.code !== snapshot.code);
@@ -464,24 +794,39 @@ export class AmazonJpProductOrderMonitor {
         : evaluateAmazonJpProductOrder(snapshot, msrp, config.priceToleranceYen ?? 1);
       Object.assign(storage, {
         targetAsin: snapshot.asin,
-        refreshCount: Number(storage.refreshCount || 0) + 1,
         lastCheckedAt: new Date().toISOString(),
         lastSnapshot: { ...snapshot, msrpYen: msrp?.msrpYen || null, msrpSource: msrp?.source || '', evaluation: evaluation.reason },
+        lastPageDiagnostic: snapshot.diagnostic || null,
         lastError: ''
       });
-      await this.recordStep('product_evaluated', { asin: snapshot.asin, result: evaluation.reason, priceYen: snapshot.priceYen, msrpYen: msrp?.msrpYen || null });
+      this.refreshCount += 1;
+      this.maintenancePollCount += 1;
+      if (signal) {
+        // Keep a bounded, credential-free history of signal-to-offer decisions;
+        // ordinary polling does not create an order record or grow this list.
+        this.signalChecks = [...this.signalChecks, {
+          at: storage.lastCheckedAt, asin: targetAsin, result: evaluation.reason,
+          signalToReadMs: storage.lastSignalF5LatencyMs,
+          diagnostic: snapshot.diagnostic || null
+        }].slice(-40);
+      }
+      await this.recordStep('product_evaluated', { asin: snapshot.asin, result: evaluation.reason, priceYen: snapshot.priceYen, msrpYen: msrp?.msrpYen || null, diagnostic: snapshot.diagnostic || null });
+      if (evaluation.reason === 'verification_required') throw Object.assign(new Error('日亞要求人工驗證；請開啟專用視窗處理，已暫停自動刷新'), { code: 'AMAZON_VERIFICATION_REQUIRED' });
       if (evaluation.reason === 'rate_limited') throw Object.assign(new Error('Amazon.co.jp 回傳真正的流量限制或驗證頁'), { code: 'AMAZON_RATE_LIMITED' });
       if (evaluation.reason === 'login_required') throw Object.assign(new Error('日亞商品頁專用瀏覽器尚未登入或登入已失效；請完成登入檢查'), { code: 'AMAZON_LOGIN_REQUIRED' });
       if (['page_not_found', 'product_unreadable'].includes(evaluation.reason)) {
-        throw new Error(evaluation.reason === 'page_not_found' ? '日亞商品頁不存在或暫時無法讀取' : '商品頁尚未完整載入，暫停後重新檢查');
+        throw Object.assign(new Error(evaluation.reason === 'page_not_found' ? '日亞商品頁不存在或暫時無法讀取' : '商品頁等待關鍵資料後仍未完整載入，將有限恢復'),
+          { code: evaluation.reason === 'page_not_found' ? 'AMAZON_PRODUCT_NOT_FOUND' : 'AMAZON_PRODUCT_UNREADABLE' });
       }
       this.failureCount = 0;
+      storage.pageRecoveryCount = 0;
       delete storage.backoffUntil;
       if (!purchase) {
         storage.status = config.enabled ? this.waitingStatus() : 'idle';
         await this.state.save();
         return { status: 'inspected_only', snapshot: storage.lastSnapshot };
       }
+      if (evaluation.reason === 'not_purchasable') { this.raceCoordinator?.unavailable(this.slot); delete storage.preSubmitRetry; }
       if (!evaluation.eligible) {
         storage.status = evaluation.reason === 'purchase_limited' ? 'purchase_limited' : this.waitingStatus();
         if (evaluation.reason === 'purchase_limited') this.setBackoff(60_000);
@@ -489,13 +834,42 @@ export class AmazonJpProductOrderMonitor {
         // signal that lost its offer is a real failed attempt worth reporting.
         if (signal) {
           const reasons = {
-            not_purchasable: '進入商品頁後已無可用購買按鈕', seller_not_amazon: '未能確認 Amazon.co.jp 自營報價',
+            not_purchasable: apiClient ? amazonOfferDecisionText(snapshot.diagnostic) : '進入商品頁後已無可用購買按鈕', seller_not_amazon: '未能確認 Amazon.co.jp 自營報價',
             price_missing: '未讀到價格', above_msrp: '價格已高於原價容許範圍', non_jpy_price: '未讀到日圓價格',
             purchase_limited: '帳號已達限購', msrp_not_found: '找不到官方定價', product_mismatch: '商品與目標不符'
           };
           await this.sendPrivateAndRecord(`❌ 日亞商品頁補貨訊號觸發後未能購買｜${snapshot.title || targetAsin}｜原因：${reasons[evaluation.reason] || evaluation.reason}｜${this.mode() === 'hybrid' ? '依雙線模式繼續檢查' : '等待下一次補貨訊號'}`, 'failure');
         }
         await this.state.save();
+        if (this.fastLaneEnabled() && apiClient && !this.pendingSignal
+          && evaluation.reason !== 'purchase_limited'
+          && (!this.directIdleOrderBaseline || this.directIdleOrderBaseline.asin !== targetAsin
+            || Date.now() - Date.parse(this.directIdleOrderBaseline.at) >= 20_000)) {
+          this.phase = 'maintenance';
+          await this.prepareDirectIdleBaseline(apiClient);
+        }
+        // Maintenance is deliberately after an unavailable quote. A qualifying
+        // offer always wins; never clean during checkout or unresolved intent.
+        if (this.fastLaneEnabled() && typeof apiClient?.clearIdleCart === 'function'
+          && this.maintenancePollCount >= 500
+          && !this.raceCoordinator?.maintenanceBlocked()
+          && !['needs_login', 'needs_verification'].includes(storage.idleCartMaintenance?.status)
+          && evaluation.reason !== 'purchase_limited' && !this.pendingSignal && !this.hasPendingApiTransaction()
+          && !this.stopped && this.getConfig()?.enabled) {
+          this.maintenancePollCount = 0;
+          this.phase = 'maintenance';
+          try {
+            const result = await apiClient.clearIdleCart();
+            storage.idleCartMaintenance = { at: new Date().toISOString(), status: 'completed', removed: result.removed };
+          } catch (error) {
+            const auth = error.code === 'AMAZON_LOGIN_REQUIRED' ? 'needs_login'
+              : error.code === 'AMAZON_VERIFICATION_REQUIRED' ? 'needs_verification' : '';
+            storage.idleCartMaintenance = { at: new Date().toISOString(), scope: 'cart', status: auth || 'failed',
+              error: auth ? '待機購物車整理需另行驗證；商品監控與購買持續' : safePurchaseText(error) };
+            if (error.code === 'AMAZON_RATE_LIMITED') throw error;
+          }
+          await this.state.save();
+        }
         return { status: storage.status, snapshot: storage.lastSnapshot };
       }
       // Settings/stop may change across asynchronous page operations. Never
@@ -504,6 +878,11 @@ export class AmazonJpProductOrderMonitor {
         return { skipped: true, reason: 'task_cancelled' };
       }
       this.pendingSignal = null;
+      if (apiClient && this.fastLaneEnabled() && this.raceCoordinator && (this.raceCoordinator.connected(this.slot) || this.raceCoordinator.current(this.slot))) {
+        try { this.activeRaceLease = await this.raceCoordinator.begin(this.slot, 'api', targetAsin); }
+        catch (error) { if (error.code === 'AMAZON_RACE_STOPPED') return { skipped: true, reason: 'race_route_consumed' }; throw error; }
+        if (apiClient) apiClient.idleOrderBaseline = null;
+      }
       if (this.timer) clearTimeout(this.timer);
       this.timer = null;
       this.nextAttemptAt = null;
@@ -511,25 +890,51 @@ export class AmazonJpProductOrderMonitor {
       attemptedPurchase = true;
       storage.status = 'ordering';
       storage.triggeredAt = new Date().toISOString();
-      await this.state.save();
+      await (this.fastLaneEnabled() ? this.saveApiCheckpoint() : this.state.save());
       this.activeOrderRecord = await this.orderHistory.begin({
         slot: this.slot, mode: this.mode(), trigger: storage.lastTrigger,
+        ...(this.activeRaceLease ? { route: 'api', raceId: this.activeRaceLease.waveId } : {}),
         signalAt: signal?.matchedAt ? new Date(signal.matchedAt).toISOString() : null,
         scanStartedAt: new Date(this.taskClock).toISOString(), taskStartedAt: storage.taskStartedAt,
-        snapshot, msrpYen: msrp?.msrpYen, steps: this.currentScanSteps
+        snapshot, msrpYen: msrp?.msrpYen, steps: this.currentScanSteps, compactSteps: true
       });
+      this.browserEvidenceStarted=false;
+      this.browserEvidenceResponse=false;
+      const beforeSubmit = async checkout => {
+        const currentConfig = this.getConfig() || {};
+        const quote = validateAmazonJpProductCheckout(checkout, { asin: targetAsin, code: snapshot.code,
+          msrpYen: msrp.msrpYen, toleranceYen: currentConfig.priceToleranceYen ?? 1,
+          maxShippingYen: Math.max(0, Math.min(10_000, Number(currentConfig.maxShippingYen ?? 500) || 0)) });
+        await this.recordStep('checkout_verified', { step: 6, asin: targetAsin, quantity: 1, ...quote });
+      };
+      let result;
+      if (apiClient) {
+        result = await apiClient.checkout(snapshot, { beforeSubmit });
+        submitted = apiClient.submitted;
+      } else {
       await this.clickQualifiedOffer(page, snapshot, msrp);
-      const result = await this.checkoutRunner(
+      result = await this.checkoutRunner(
         page,
         (targetPage) => this.checkoutSnapshot(targetPage),
         (name, detail) => {
           if (name === 'submit_order') submitted = true;
           return this.recordStep(name, detail);
+        },
+        {
+          canContinue: () => !this.stopped && this.getConfig()?.enabled && extractAmazonAsin(this.getConfig()?.targetUrl) === targetAsin,
+          beforeSubmit
         }
       );
-      const confirmed = result.status === 'ordered';
+      }
+      const confirmed = result.status === 'ordered' && Boolean(result.snapshot.orderId);
+      if (!confirmed) result.status = 'submitted_unconfirmed';
+      if (this.activeRaceLease) await this.raceCoordinator.finish(this.activeRaceLease, { status: result.status, orderId: result.snapshot.orderId });
       await this.orderHistory.finish(this.activeOrderRecord, { status: result.status, orderId: result.snapshot.orderId });
-      if (confirmed) storage.completedCount += 1;
+      if (confirmed) {
+        delete storage.preSubmitRetry;
+        storage.completedCount += 1;
+        if (storage.apiTransaction) storage.apiTransaction.accounted = true;
+      }
       const taskComplete = confirmed && storage.completedCount >= targetSuccessCount;
       Object.assign(storage, {
         status: taskComplete ? 'completed' : confirmed ? this.waitingStatus() : 'needs_review',
@@ -553,26 +958,72 @@ export class AmazonJpProductOrderMonitor {
       }
       return result;
     } catch (error) {
-      const loginRequired = error.code === 'AMAZON_LOGIN_REQUIRED';
-      storage.status = submitted ? 'needs_review' : loginRequired ? 'needs_login' : this.getConfig()?.enabled ? this.waitingStatus() : 'idle';
-      if (!submitted && !loginRequired) {
-        this.failureCount += 1;
-        this.setBackoff(error.code === 'AMAZON_RATE_LIMITED' ? Math.min(300_000, 60_000 * 2 ** Math.min(3, this.failureCount - 1)) : attemptedPurchase ? 15_000 : 30_000);
+      apiClient?.captureFailure?.(error);
+      if(this.browserEvidenceStarted)await this.captureBrowserEvidence('failure',error);
+      submitted ||= Boolean(apiClient?.submitted || ['submitted', 'confirmed'].includes(storage.apiTransaction?.phase));
+      // Only a recognized, received pre-submit shell can switch entry route.
+      // Never change route after a timeout, auth challenge, or uncertain order.
+      if (error.code === 'AMAZON_CHECKOUT_SHELL' && apiClient?.directBuyNow && !submitted && this.canRecoverPreSubmit(false)) {
+        const previous = storage.checkoutEntryFallback;
+        storage.checkoutEntryFallback = { asin: storage.targetAsin, reason: 'checkout_shell',
+          since: new Date().toISOString(), until: new Date(Date.now() + 120_000).toISOString() };
+        if (previous?.until && Date.parse(previous.until) > Date.now()) storage.checkoutEntryFallback = previous;
       }
-      if (submitted || loginRequired) this.pendingSignal = null;
+      if (this.activeRaceLease) await this.raceCoordinator.finish(this.activeRaceLease, { status: submitted ? 'submitted_unconfirmed' : 'failed' });
+      const retry = await this.recoverPreSubmit({ submitted, recordRetry: false,
+        minimumDelayMs: error.code === 'AMAZON_RATE_LIMITED' ? Math.max(60_000, error.retryAfterMs || 0) : 0 });
+      const needsCartReview = error.code === 'AMAZON_CART_REVIEW' || this.hasPendingApiTransaction();
+      const loginRequired = error.code === 'AMAZON_LOGIN_REQUIRED';
+      const verificationRequired = error.code === 'AMAZON_VERIFICATION_REQUIRED';
+      if (loginRequired || verificationRequired) storage.loginIssueScope = error.requestScope || (attemptedPurchase ? 'checkout' : 'product');
+      // AOD and the product buybox can change between the two GETs. When no
+      // buy-now POST was attempted, this is an availability race, not a broken
+      // submission. Keep the configured cadence; never apply this to a timeout,
+      // contract mismatch, rate limit, or any pending transaction.
+      const directOfferDisappeared = error.code === 'AMAZON_DIRECT_BUY_UNAVAILABLE'
+        && this.fastLaneEnabled() && !apiClient?.addAttempted && !submitted && !needsCartReview;
+      storage.status = submitted ? 'needs_review' : verificationRequired ? 'needs_verification' : loginRequired ? 'needs_login' : needsCartReview ? 'needs_review' : this.getConfig()?.enabled ? this.waitingStatus() : 'idle';
+      if (directOfferDisappeared) {
+        this.failureCount = 0;
+        delete storage.backoffUntil;
+        delete storage.lastFailureCode;
+      } else if (!submitted && !loginRequired && !verificationRequired && !retry) {
+        if (storage.lastFailureCode !== (error.code || 'UNKNOWN')) this.failureCount = 0;
+        storage.lastFailureCode = error.code || 'UNKNOWN';
+        this.failureCount += 1;
+        const incomplete = error.code === 'AMAZON_PRODUCT_UNREADABLE';
+        this.setBackoff(error.code === 'AMAZON_RATE_LIMITED' ? Math.min(300_000, 60_000 * 2 ** Math.min(3, this.failureCount - 1))
+          : error.code === 'AMAZON_PRODUCT_NOT_FOUND' ? 300_000
+          : incomplete ? amazonProductRecoveryDelay(this.failureCount) : attemptedPurchase ? 15_000 : 30_000);
+        if (error.retryAfterMs) this.setBackoff(error.retryAfterMs);
+        // Reopen only the page, once per consecutive unreadable sequence.
+        // Preserve the account's persistent context/cookies; never do this in checkout.
+        if (this.transport() === 'browser' && incomplete && this.failureCount >= 2 && !attemptedPurchase && !storage.pageRecoveryCount) {
+          storage.pageRecoveryCount = 1;
+          await this.page?.close?.().catch(() => {});
+          this.page = null;
+          await this.recordStep('product_page_recovery', { action: '下次檢查重開商品頁，保留帳號工作階段' });
+        }
+      }
+      // A throttled order POST is still an unknown submission. Hold both the
+      // transaction and Retry-After; even manual reconciliation must wait.
+      if (error.code === 'AMAZON_RATE_LIMITED') this.setBackoff(Math.max(60_000, error.retryAfterMs || 0));
+      if (submitted || loginRequired || verificationRequired || needsCartReview) this.pendingSignal = null;
+      if (loginRequired || verificationRequired) delete storage.backoffUntil;
       storage.lastCheckedAt = new Date().toISOString();
-      storage.lastError = error.message;
-      await this.recordStep('failure', { error: error.message });
+      storage.lastError = safePurchaseText(error);
+      await this.recordStep('failure', { error: safePurchaseText(error), diagnostic: storage.lastPageDiagnostic || null });
+      if (retry) await this.recordStep('pre_submit_retry', { retryCount: retry.attempts, retryDelayMs: retry.delayMs });
       if (this.activeOrderRecord) await this.orderHistory.finish(this.activeOrderRecord, {
-        status: submitted ? 'submitted_unconfirmed' : 'failed', error: error.message
+        status: submitted ? 'submitted_unconfirmed' : 'failed', error: safePurchaseText(error)
       });
-      const notificationKey = `${error.message}|${storage.lastSnapshot?.asin || ''}`;
-      if (purchase && (signal || attemptedPurchase || loginRequired || error.code === 'AMAZON_RATE_LIMITED') && storage.lastErrorNotifiedKey !== notificationKey) {
+      const notificationKey = `${safePurchaseText(error)}|${storage.lastSnapshot?.asin || ''}`;
+      if (purchase && (signal || attemptedPurchase || loginRequired || verificationRequired || error.code === 'AMAZON_RATE_LIMITED') && storage.lastErrorNotifiedKey !== notificationKey) {
         storage.lastErrorNotifiedKey = notificationKey;
         await this.sendPrivateAndRecord(
           submitted
-            ? `⚠️ 日亞商品頁送單後狀態不明｜${storage.lastSnapshot?.title || storage.targetAsin || '目標商品'}｜原因：${error.message}｜請先檢查訂單，任務已暫停避免重複下單`
-            : `❌ 日亞商品頁任務失敗｜${storage.lastSnapshot?.title || storage.targetAsin || '目標商品'}｜原因：${error.message}｜${loginRequired ? '等待完成登入檢查' : this.mode() === 'hybrid' ? '降速後依雙線模式繼續' : '等待下一次補貨訊號'}`,
+            ? `⚠️ 日亞商品頁送單後狀態不明｜${storage.lastSnapshot?.title || storage.targetAsin || '目標商品'}｜原因：${safePurchaseText(error)}｜請先檢查訂單，任務已暫停避免重複下單`
+            : `❌ 日亞任務失敗｜${storage.lastSnapshot?.title || storage.targetAsin || '目標商品'}｜原因：${safePurchaseText(error)}｜${verificationRequired ? '等待使用者完成驗證' : loginRequired ? '等待完成登入檢查' : retry ? `尚未送單，${Math.ceil(retry.delayMs / 1000)} 秒後自動重試；監控任務繼續` : needsCartReview ? '保留購物車，等待人工核對，不重加／重送' : this.mode() === 'hybrid' ? '降速後依雙線模式繼續' : '等待下一次補貨訊號'}`,
           submitted ? 'unconfirmed' : 'failure'
         );
       }
@@ -584,6 +1035,7 @@ export class AmazonJpProductOrderMonitor {
       throw error;
     } finally {
       this.activeOrderRecord = null;
+      this.activeRaceLease = null;
       this.running = false;
       this.phase = 'idle';
       this.rearm();
@@ -604,6 +1056,21 @@ export class AmazonJpProductOrderMonitor {
     if (this.running) return; // The active check will rearm when it finishes.
     const cooldown = (Date.parse(this.storage().backoffUntil || '') || 0) - Date.now();
     if (cooldown > 0) { this.rearm(); return; }
+    // Prepare before the first scheduled quote, not after a qualified offer.
+    // A real stock signal skips preparation and takes the hot path immediately.
+    if (this.fastLaneEnabled() && !this.pendingSignal && (!this.directIdleOrderBaseline
+      || this.directIdleOrderBaseline.asin !== extractAmazonAsin(this.getConfig()?.targetUrl))) {
+      this.running = true; this.phase = 'maintenance';
+      try { await this.prepareDirectIdleBaseline(await this.httpClient()); }
+      catch (error) {
+        this.setBackoff(Math.max(60_000, error.retryAfterMs || 0));
+        this.storage().lastError = safePurchaseText(error);
+        if (error.code === 'AMAZON_LOGIN_REQUIRED') this.storage().status = 'needs_login';
+        if (error.code === 'AMAZON_VERIFICATION_REQUIRED') this.storage().status = 'needs_verification';
+        await this.state.save(); this.running = false; this.phase = 'idle'; this.rearm(); return;
+      } finally { this.running = false; this.phase = 'idle'; }
+    }
+    if (!this.canSchedule()) { this.rearm(); return; }
     const signal = this.pendingSignal;
     this.pendingSignal = null;
     if (!signal && this.mode() !== 'hybrid') return;
@@ -619,12 +1086,19 @@ export class AmazonJpProductOrderMonitor {
     this.stop();
     if (!this.getConfig()?.enabled) return;
     this.stopped = false;
+    this.taskClock = Date.now();
     const storage = this.storage();
+    if (this.canRecoverPreSubmit()) {
+      await this.recoverPreSubmit();
+      storage.lastError = '前輪未送出最終訂單，已自動解除舊直購流程；繼續監控重試';
+    }
     if (storage.completedCount >= Math.max(1, Number(this.getConfig()?.targetSuccessCount) || 1)) {
       storage.status = 'completed';
-    } else if (storage.status === 'ordering') {
+    } else if (storage.status === 'ordering' || this.hasPendingApiTransaction()) {
       storage.status = 'needs_review';
-      storage.lastError = '上次下單流程在程式重啟前未確認結果；請先核對日亞訂單，避免重複送單';
+      storage.lastError = ['adding', 'cart_ready', 'buy_now'].includes(storage.apiTransaction?.phase)
+        ? '舊流程缺少可自動恢復的直購證據；請按「檢查」核對。已確認的新版未送單失敗會自動重試。'
+        : '上次下單流程在程式重啟前未確認結果；請先核對日亞訂單，避免重複送單';
     } else if (storage.status === 'needs_login'
       && storage.lastSnapshot?.loginRequired === false
       && storage.lastSnapshot?.pageIssue) {
@@ -633,7 +1107,7 @@ export class AmazonJpProductOrderMonitor {
       storage.status = this.waitingStatus();
       storage.lastError = '';
       delete storage.backoffUntil;
-    } else if (!['needs_review', 'needs_login'].includes(storage.status)) {
+    } else if (!['needs_review', 'needs_login', 'needs_verification'].includes(storage.status)) {
       storage.status = this.waitingStatus();
     }
     await this.state.save();
@@ -642,7 +1116,7 @@ export class AmazonJpProductOrderMonitor {
       // Keep every lane on a five-second cadence but spread their first hit so
       // A/B/C do not burst three Amazon requests from one IP at the same time.
       const lane = Math.max(0, ['A', 'B', 'C'].indexOf(this.slot));
-      this.scheduleNext(AMAZON_PRODUCT_POLL_MS + lane * 1650);
+      this.scheduleNext(this.pollIntervalMs() + lane * 1650);
     } else this.rearm();
   }
 
@@ -655,14 +1129,27 @@ export class AmazonJpProductOrderMonitor {
   }
 
   status() {
-    return { slot: this.slot, ...this.getConfig(), ...this.storage(), orderHistory: this.orderHistory.status(), mode: this.mode(), pollIntervalSeconds: this.mode() === 'hybrid' ? 5 : null, phase: this.phase, running: this.running || this.browserOperation, interactive: this.interactive, nextAttemptAt: this.nextAttemptAt };
+    const { apiTransaction, ...storage } = this.storage();
+    return { slot: this.slot, ...this.getConfig(), ...storage, checkoutTransport: this.transport(),
+      targetProduct: this.targetProduct(), fastLane: this.fastLaneEnabled(),
+      checkoutEntryRoute: this.browserEntryFallbackActive() ? 'browser_fallback' : this.transport(),
+      stepLog: [...this.stepLog], purchaseSteps: [...this.stepLog], refreshCount: this.refreshCount, signalChecks: [...this.signalChecks],
+      evidencePending:this.orderHistory.evidence?.pending || 0,
+      ...(this.raceBridge ? { race: this.raceBridge.status(this.slot) } : {}),
+      ...(this.fastLaneEnabled() ? { checkoutRoute: 'direct_buy_now' } : {}),
+      apiTransactionStatus: apiTransaction?.phase || '', apiOrderCheckAvailable: this.hasPendingApiTransaction() && ['submitted', 'confirmed'].includes(apiTransaction?.phase),
+      apiCartReviewAvailable: this.transport() === 'api' && storage.status === 'needs_review'
+        && (!apiTransaction || !['submitted', 'confirmed'].includes(apiTransaction.phase)),
+      orderHistory: this.orderHistory.status(), mode: this.mode(), pollIntervalSeconds: this.mode() === 'hybrid' ? this.pollIntervalMs() / 1000 : null, phase: this.phase, running: this.running || this.browserOperation, interactive: this.interactive, nextAttemptAt: this.nextAttemptAt };
   }
 
   async closeBrowser() {
-    await this.context?.close().catch(() => {});
+    const context = this.context;
     this.context = null;
     this.page = null;
     this.headless = null;
+    this.interactive = false;
+    await context?.close().catch(() => {});
   }
 
   async close() {

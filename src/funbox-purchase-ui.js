@@ -2,10 +2,10 @@ import { esliteOrderTablesHtml, esliteSheetOutcome } from './eslite-purchase-ui.
 
 // Presentation only: rendering never requests a storefront or changes a cart.
 export function funboxAccountRowHtml(slot) {
-  return `<tr id="funbox-sheet-account-${slot}"><td id="funbox-sheet-identity-${slot}">${slot}</td><td id="funbox-sheet-login-${slot}">—</td><td id="funbox-sheet-api-${slot}">—</td><td id="funbox-sheet-payment-${slot}">—</td><td id="funbox-sheet-pending-${slot}" class="eslite-num">0</td><td id="funbox-sheet-purchased-${slot}" class="eslite-num">0</td><td id="funbox-sheet-heartbeat-${slot}">—</td><td><div class="eslite-actions"><button type="button" onclick="testAutoPurchaseLogin('funbox','${slot}')">登入</button><button type="button" onclick="completeAutoPurchaseLogin('funbox','${slot}')">檢查</button><button id="funbox-sheet-settings-${slot}" type="button" aria-expanded="false" onclick="toggleFunboxAccountCard('${slot}')">帳密設定</button><button id="funbox-sheet-hold-${slot}" type="button" hidden onclick="resolveFunboxHold('${slot}')">核對未成立</button></div></td></tr>`;
+  return `<tr id="funbox-sheet-account-${slot}"><td id="funbox-sheet-identity-${slot}"><strong>${slot} · <a id="funbox-sheet-browser-${slot}" class="account-browser-link" href="#funbox-account-${slot}-card" title="開啟此帳號瀏覽器；沿用已存登入，關閉後恢復派單" onclick="event.preventDefault();purchaseAccountAction(this,'funbox','${slot}','open-browser')">未設定</a></strong></td><td id="funbox-sheet-login-${slot}">—</td><td id="funbox-sheet-api-${slot}">—</td><td id="funbox-sheet-payment-${slot}">—</td><td id="funbox-sheet-pending-${slot}" class="eslite-num">0</td><td id="funbox-sheet-purchased-${slot}" class="eslite-num">0</td><td id="funbox-sheet-heartbeat-${slot}">—</td><td><div class="eslite-actions" id="funbox-sheet-actions-${slot}"><button type="button" onclick="testAutoPurchaseLogin('funbox','${slot}')">登入</button><button type="button" onclick="completeAutoPurchaseLogin('funbox','${slot}')">檢查</button><button id="funbox-sheet-settings-${slot}" type="button" aria-expanded="false" onclick="toggleFunboxAccountCard('${slot}')">帳密設定</button><button id="funbox-sheet-hold-${slot}" type="button" hidden onclick="resolveFunboxHold('${slot}')">核對未成立</button></div></td></tr>`;
 }
 
-export const funboxAccountTableHtml = `<div class="eslite-sheet"><div class="eslite-sheet-scroll"><table class="eslite-account-table funbox-account-table" aria-label="FUNBOX 帳號狀態"><colgroup><col style="width:140px"><col style="width:90px"><col style="width:130px"><col style="width:110px"><col style="width:55px"><col style="width:60px"><col style="width:120px"><col style="width:250px"></colgroup><thead><tr><th>帳號</th><th>登入</th><th>下單狀態</th><th>付款</th><th>待購</th><th>已購款</th><th>心跳</th><th>操作</th></tr></thead><tbody>${['A', 'B', 'C'].map(funboxAccountRowHtml).join('')}</tbody></table></div></div>`;
+export const funboxAccountTableHtml = `<div class="eslite-sheet"><div class="eslite-sheet-scroll"><table class="eslite-account-table funbox-account-table" aria-label="FUNBOX 帳號狀態"><colgroup><col style="width:18%"><col style="width:8%"><col style="width:20%"><col style="width:12%"><col style="width:5%"><col style="width:6%"><col style="width:8%"><col style="width:23%"></colgroup><thead><tr><th>帳號</th><th>登入</th><th>下單狀態</th><th>付款</th><th>待購</th><th>已購款</th><th>心跳</th><th>操作</th></tr></thead><tbody>${['A', 'B', 'C'].map(funboxAccountRowHtml).join('')}</tbody></table></div></div>`;
 export const funboxOrderTablesHtml = esliteOrderTablesHtml.replaceAll('eslite-sheet-', 'funbox-sheet-').replaceAll('renderEsliteTables', 'renderFunboxTables').replaceAll("exportPurchaseLog('eslite')", "exportPurchaseLog('funbox')").replaceAll("refreshPurchaseOrderStatuses('eslite',true)", "refreshPurchaseOrderStatuses('funbox',true)").replaceAll('誠品', 'FUNBOX');
 export const funboxTableCss = `.funbox-purchase-panel .funbox-account.compact{display:none}.funbox-purchase-panel .eslite-account-head-actions{display:none}.funbox-purchase-panel .funbox-account-list{margin:8px 0}.funbox-purchase-panel .compact-copy{font-size:12px}.funbox-purchase-panel .field button{font-size:12px;padding:7px 10px}`;
 
@@ -47,7 +47,9 @@ export function renderFunboxTables(autoPurchase = {}) {
   for (const slot of currentFunboxSlots()) {
     const account = accounts.find(item => item.slot === slot) || {}, runtime = runtimes.find(item => item.slot === slot) || {};
     const put = (name, text, tone = '') => { const cell = document.getElementById('funbox-sheet-' + name + '-' + slot); cell.textContent = text; cell.className = tone; };
-    put('identity', slot + ' · ' + (account.displayAccount || account.account || '未設定'));
+    const accountLink = document.getElementById('funbox-sheet-browser-' + slot);
+    accountLink.textContent = account.displayAccount || account.account || '未設定';
+    accountLink.setAttribute('aria-disabled', String(!account.ready || Boolean(runtime.busy)));
     put('login', !account.ready ? '未設定' : labels[runtime.loginState || account.loginState] || '待檢查', runtime.loginState === 'ready' ? 'ok' : 'muted');
     const text = !account.ready ? '未設定' : runtime.purchaseHold ? '訂單待核對' : runtime.busy ? '正在下單' : account.enabled === false ? '已停用' : runtime.pickupSetupRequired ? '貨到門市待設定' : !runtime.heartbeatEnabled ? '休眠' : runtime.loginState === 'ready' ? '可接任務' : '待登入檢查';
     put('api', text + (runtime.checkoutTransport === 'http_api' ? ' · API' : runtime.checkoutTransport === 'browser' ? ' · 網頁' : '') + (autoPurchase.funbox?.accountModes?.[slot] === 'batch' ? ' · 合單' : ' · 單品'), runtime.purchaseHold ? 'eslite-warning' : runtime.loginState === 'ready' ? 'ok' : 'muted');
@@ -58,6 +60,8 @@ export function renderFunboxTables(autoPurchase = {}) {
     put('heartbeat', runtime.heartbeatEnabled ? '8 分鐘' : '休眠', 'muted');
     document.getElementById('funbox-sheet-hold-' + slot).hidden = !runtime.purchaseHold;
     document.getElementById('funbox-sheet-settings-' + slot).setAttribute('aria-expanded', String(funboxExpandedSlots.has(slot)));
+    if (runtime.accountBrowserOpen) put('api', '帳號瀏覽器使用中 · 暫停派單', 'eslite-warning');
+    else if (runtime.cartActionUncertain) put('api', '手動清車待確認', 'eslite-warning');
   }
   const running = (autoPurchase.inProgress || []).filter(item => item.platform === 'funbox');
   const queue = (autoPurchase.queue || []).filter(item => item.platform === 'funbox');

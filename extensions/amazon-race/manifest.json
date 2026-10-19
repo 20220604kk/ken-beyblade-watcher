@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Ken 日亞雙路競速連接器",
+  "version": "1.0.0",
+  "minimum_chrome_version": "120",
+  "description": "普通 Chrome 背景分頁與本機 API 獨立購買；每路每波最多一張。",
+  "permissions": ["storage", "alarms", "scripting"],
+  "host_permissions": ["https://www.amazon.co.jp/*", "http://127.0.0.1:3210/*"],
+  "background": { "service_worker": "background.js", "type": "module" },
+  "action": { "default_popup": "popup.html" }
+}

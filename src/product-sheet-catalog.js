@@ -46,10 +46,11 @@ export function parseCatalogCsv(text) {
 }
 
 export class ProductSheetCatalog {
-  constructor({ fetchImpl = fetch, now = Date.now } = {}) {
+  constructor({ fetchImpl = fetch, now = Date.now,
+    sheetId = process.env.PRODUCT_CATALOG_SHEET_ID || '', sheetGid = process.env.PRODUCT_CATALOG_SHEET_GID || '0' } = {}) {
     this.fetch = fetchImpl; this.now = now; this.items = []; this.updatedAt = null; this.error = ''; this.lastAttempt = null; this.pending = null;
-    const id = String(process.env.PRODUCT_CATALOG_SHEET_ID || '').trim();
-    const gid = String(process.env.PRODUCT_CATALOG_SHEET_GID || '0').trim();
+    const id = String(sheetId).trim();
+    const gid = String(sheetGid).trim();
     const valid = /^[A-Za-z0-9_-]{20,100}$/.test(id) && /^\d{1,12}$/.test(gid);
     this.sourceUrl = valid ? `https://docs.google.com/spreadsheets/d/${id}/edit?gid=${gid}` : '';
     this.csvUrl = valid ? `https://docs.google.com/spreadsheets/d/${id}/export?format=csv&gid=${gid}` : '';

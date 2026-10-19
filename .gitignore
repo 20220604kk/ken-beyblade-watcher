@@ -30,11 +30,15 @@ test-results/
 .DS_Store
 Thumbs.db
 
-# Development fixtures and private validation remain in the local development project.
-test/
-docs/evidence/
-docs/restock-reference-for-ai/
-scripts/commerce-*.mjs
-src/drill-runner.js
-購物網站多角度驗收.cmd
+# Sanitized regression tests are part of the full development handoff.
+# Private runtime, dependencies and generated binaries remain excluded.
 *.bundle
+*.exe
+*.dll
+*.pdb
+*.dmp
+*.nupkg
+.credential-key
+*session*.json
+# Retired Facebook drill depends on the separately archived FB modules.
+src/drill-runner.js

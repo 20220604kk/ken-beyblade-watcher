@@ -6,7 +6,9 @@ import * as cheerio from 'cheerio';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REFERENCE_DIR = path.join(ROOT, 'data', 'reference');
-const MANUAL_PATH = path.join(REFERENCE_DIR, 'taiwan-msrp-manual.json');
+const localManualPath = path.join(REFERENCE_DIR, 'taiwan-msrp-manual.json');
+const MANUAL_PATH = await fs.access(localManualPath).then(() => localManualPath)
+  .catch(() => path.join(ROOT, 'assets', 'reference', 'taiwan-msrp-manual.json'));
 const OUTPUT_PATH = path.join(REFERENCE_DIR, 'taiwan-msrp-catalog.json');
 const TABLE_PATH = path.join(REFERENCE_DIR, 'taiwan-msrp-catalog.md');
 const HUB_URL = 'https://beybladehub.app/parts/combos';

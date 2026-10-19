@@ -696,7 +696,7 @@ export class AmazonJapanMonitor {
     };
   }
 
-  async inspectDedicatedPreCatalogProducts(products, officialCatalog, pricingCatalog, storage) {
+  async inspectDedicatedPreCatalogProducts(products, officialCatalog, pricingCatalog, storage, onObserved = () => {}) {
     const pending = products.filter((product) => (
       product.dedicatedUntilCatalog === true
       && !matchTakaraTomyCatalog(product, officialCatalog)
@@ -712,7 +712,10 @@ export class AmazonJapanMonitor {
         const offer = catalogItem
           ? await this.verifyOffer(product, catalogItem)
           : parseAmazonOffer(await this.loadPage(canonicalAmazonJapanUrl(product.asin)), product.asin);
-        if (catalogItem) observed.push(offer);
+        if (catalogItem) {
+          observed.push(offer);
+          onObserved(offer);
+        }
         current[product.asin] = {
           ...previous[product.asin],
           ...offer,
@@ -755,6 +758,48 @@ export class AmazonJapanMonitor {
     this.running = true;
     const startedAt = Date.now();
     const storage = this.storage();
+    // Keep this round's comparison baseline stable while committing each
+    // completed observation. A later page failure must not replay a signal
+    // already delivered to the independent purchase lane.
+    const previous = { ...storage.products };
+    const discoveryUpgrade = storage.searchDiscoveryVersion !== 1;
+    const availabilityEvents = new Map();
+    // Delivery retry is independent of the availability transition: Discord
+    // failure must neither lose a notification nor replay a purchase signal.
+    const pendingNotifications = storage.pendingAvailabilityNotifications ||= {};
+    let notified = 0;
+    let notificationsStarted = false;
+    const notifyObserved = async () => {
+      notificationsStarted = true;
+      // Discord delivery may wait, but all purchase signals are already handed
+      // off. Also deliver observations if a later page aborts this round.
+      for (const [asin, { product, kind }] of Object.entries(pendingNotifications)) {
+        const message = amazonJapanNotification(product, {
+          kind, xConfirmed: Boolean(storage.xSignals?.[product.asin])
+        });
+        const messageId = await this.notify(message.text, message.options);
+        delete pendingNotifications[asin];
+        this.log(`日亞通知已送出：${product.code}｜ASIN ${product.asin}｜Discord 訊息 ID ${messageId || 'ok'}。`);
+        notified += 1;
+      }
+    };
+    const observe = (product) => {
+      storage.products[product.asin] = product;
+      if (!storage.initialized || discoveryUpgrade || !product.available) return;
+      const old = previous[product.asin];
+      const kind = !old ? 'new' : old.available === false ? 'restock' : '';
+      if (!kind || availabilityEvents.has(product.asin)) return;
+      availabilityEvents.set(product.asin, { product, kind });
+      pendingNotifications[product.asin] = { product: { ...product }, kind };
+      // Handoff immediately, before another product read, a Discord request,
+      // or a debounced state save. Never await checkout in the monitoring lane.
+      try {
+        void Promise.resolve(this.onAvailabilitySignal({ ...product }, { source: '日亞官方原價', kind }))
+          .catch((error) => this.log(`日亞購買訊號交付失敗（監控繼續）：${error.message}`));
+      } catch (error) {
+        this.log(`日亞購買訊號交付失敗（監控繼續）：${error.message}`);
+      }
+    };
     try {
       await this.ensureSeedSignals();
       const catalog = await this.refreshCatalog(storage, forceCatalog);
@@ -806,7 +851,8 @@ export class AmazonJapanMonitor {
         configuredWatch,
         catalog,
         pricingCatalog,
-        storage
+        storage,
+        observe
       );
       const dedicatedPendingAsins = new Set(dedicated.pending.map((product) => product.asin));
       const searchHtml = await this.loadPage(AMAZON_JP_SEARCH_URL);
@@ -823,8 +869,6 @@ export class AmazonJapanMonitor {
         if (japanProductBlacklistMatch(product, blacklist)) return false;
         return true;
       });
-      const previous = storage.products || {};
-      const discoveryUpgrade = storage.searchDiscoveryVersion !== 1;
       const observed = new Map(dedicated.observed.map((product) => [product.asin, product]));
       const rejected = blacklistedRows.map((product) => ({
         ...product,
@@ -873,6 +917,7 @@ export class AmazonJapanMonitor {
           };
         }
         observed.set(verified.asin, verified);
+        observe(verified);
         if (!verified.available) rejected.push(verified);
       }
 
@@ -915,6 +960,7 @@ export class AmazonJapanMonitor {
             lastOfferCheckedAt: new Date().toISOString()
           };
           observed.set(verified.asin, verified);
+          observe(verified);
           if (!verified.available) rejected.push(verified);
         } catch (error) {
           if (error?.code === 'AMAZON_RATE_LIMITED' || error?.code === 'AMAZON_LOADING_SHELL') throw error;
@@ -925,26 +971,9 @@ export class AmazonJapanMonitor {
       const eligible = [...observed.values()].filter((product) => product.available);
       const current = { ...previous };
       for (const [asin, product] of observed) current[asin] = product;
-      let notified = 0;
-      let discovered = 0;
-      let restocked = 0;
-      if (storage.initialized && !discoveryUpgrade) {
-        for (const product of eligible) {
-          const old = previous[product.asin];
-          const kind = !old ? 'new' : old.available === false ? 'restock' : '';
-          if (!kind) continue;
-          if (kind === 'new') discovered += 1; else restocked += 1;
-          const message = amazonJapanNotification(product, {
-            kind,
-            xConfirmed: Boolean(storage.xSignals?.[product.asin])
-          });
-          void Promise.resolve(this.onAvailabilitySignal(product, { source: '日亞官方原價', kind }))
-            .catch((error) => this.log(`日亞官方原價同品項 F5 提示失敗：${error.message}`));
-          const messageId = await this.notify(message.text, message.options);
-          this.log(`日亞通知已送出：${product.code}｜ASIN ${product.asin}｜Discord 訊息 ID ${messageId || 'ok'}。`);
-          notified += 1;
-        }
-      }
+      const discovered = [...availabilityEvents.values()].filter(({ kind }) => kind === 'new').length;
+      const restocked = [...availabilityEvents.values()].filter(({ kind }) => kind === 'restock').length;
+      await notifyObserved();
       storage.initialized = true;
       storage.searchDiscoveryVersion = 1;
       storage.products = current;
@@ -988,6 +1017,10 @@ export class AmazonJapanMonitor {
       storage.lastAttemptAt = new Date().toISOString();
       storage.lastError = error.message;
       await this.state.save();
+      if (!notificationsStarted) {
+        await notifyObserved().catch((notificationError) => this.log(`日亞部分掃描通知失敗：${notificationError.message}`));
+        await this.state.save();
+      }
       if (error?.code === 'AMAZON_RATE_LIMITED' || error?.code === 'AMAZON_LOADING_SHELL'
         || /Timeout|頁面.*關閉|context.*closed/i.test(error.message)) {
         await this.close();

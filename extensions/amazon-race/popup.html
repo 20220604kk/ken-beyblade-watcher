@@ -1,0 +1,8 @@
+<!doctype html><html lang="zh-Hant"><meta charset="utf-8"><title>Ken 日亞雙路競速</title>
+<style>body{font:14px system-ui;background:#101b2c;color:#e7effc;width:330px;padding:16px;margin:0}h1{font-size:18px}label{display:block;margin:12px 0}input,select,button{box-sizing:border-box;border-radius:8px;padding:8px;border:1px solid #465875}input[type=text]{width:100%}button{background:#386bb3;color:white;cursor:pointer}p{line-height:1.6}#status{white-space:pre-wrap;color:#74ded1}</style>
+<h1>日亞 API＋前端雙路</h1><p>每個 Chrome 個人資料只配對一組任務。兩路各可送一張；重複訂單由你取消。</p>
+<label>本機任務 <select id="slot"><option>A</option><option>B</option><option>C</option></select></label>
+<label>控制台的一次性顯示配對碼<input id="token" type="text" autocomplete="off" spellcheck="false"></label>
+<button id="inspect">讀取目前日亞登入名稱</button><p id="account"></p>
+<label><input id="confirmed" type="checkbox"> 我已確認此 Chrome 登入的是該任務要使用的 Amazon 帳號，接受最多兩張訂單</label>
+<button id="connect">連接背景執行</button><p id="status">尚未連線</p><script type="module" src="popup.js"></script></html>

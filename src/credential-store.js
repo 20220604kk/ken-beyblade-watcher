@@ -96,14 +96,19 @@ export class LocalCredentialStore {
     return esliteAccountSlots(Object.keys(this.data.esliteAccounts || {})).map((slot) => this.getEsliteAccount(slot));
   }
 
-  getEsliteMemberNames() {
+  getEsliteMemberNames({ reveal = false } = {}) {
     return Object.fromEntries(this.getEsliteAccounts().map(({ slot }) => {
       // Subscriber is the account's recorded purchaser, not a possibly different recipient.
       const name = Array.from(String(this.data.esliteMemberProfiles?.[slot]?.name
         || this.data.esliteCheckoutTemplates?.[slot]?.checkout?.subscriber?.name || '').trim());
       const masked = name.length > 2 ? name[0] + '*'.repeat(name.length - 2) + name.at(-1) : name.length ? name[0] + '*' : '';
-      return [slot, masked];
+      return [slot, reveal ? name.join('') : masked];
     }));
+  }
+
+  getEsliteDisplayIdentities() {
+    const names = this.getEsliteMemberNames({ reveal: true });
+    return { accounts: this.getEsliteAccounts().map(({ slot, account }) => ({ slot, account, memberName: names[slot] || '' })) };
   }
 
   viewEsliteCredentials(slot) {

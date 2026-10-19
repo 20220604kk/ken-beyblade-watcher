@@ -3,6 +3,17 @@ import path from 'node:path';
 
 const RETRYABLE_RENAME_ERRORS = new Set(['EPERM', 'EACCES', 'EBUSY']);
 
+export function withoutAmazonLiveDiagnostics(data) {
+  if (!data.commerce) return data;
+  const commerce = { ...data.commerce };
+  for (const key of ['amazonJpProductOrder', 'amazonJpProductOrderA', 'amazonJpProductOrderB', 'amazonJpProductOrderC']) {
+    if (!commerce[key] || typeof commerce[key] !== 'object') continue;
+    const { stepLog, refreshCount, signalChecks, lastIdleCartCheckCount, ...operational } = commerce[key];
+    commerce[key] = operational;
+  }
+  return { ...data, commerce };
+}
+
 function wait(milliseconds) {
   return new Promise((resolve) => setTimeout(resolve, milliseconds));
 }
@@ -40,6 +51,7 @@ export class StateStore {
     this.scheduledSave = null;
     this.saveTimer = null;
     this.saveStats = { requested: 0, writes: 0, coalesced: 0, lastWriteAt: '', lastBytes: 0 };
+    this.lastBackupAt = 0;
   }
 
   async load() {
@@ -47,9 +59,11 @@ export class StateStore {
     try {
       this.data = JSON.parse(await fs.readFile(this.file, 'utf8'));
     } catch (error) {
+      if (error instanceof SyntaxError) throw new Error('state.json 已損壞，已停止啟動且未清空購買歷史；請保留原檔並復原。');
       if (error.code !== 'ENOENT') throw error;
     }
     this.data.seen ||= {};
+    this.data = withoutAmazonLiveDiagnostics(this.data);
     this.data.initializedPages ||= {};
     const needsFormHistoryMigration = !this.data.forms;
     this.data.forms ||= {};
@@ -135,10 +149,27 @@ export class StateStore {
         entries.sort((a, b) => String(b[1].lastSeen).localeCompare(String(a[1].lastSeen)));
         this.data.seen = Object.fromEntries(entries.slice(0, 3000));
       }
-      const serialized = `${JSON.stringify(this.data)}\n`;
+      const serialized = `${JSON.stringify(withoutAmazonLiveDiagnostics(this.data))}\n`;
       const temporary = `${this.file}.${process.pid}.${Date.now()}.${Math.random().toString(16).slice(2)}.tmp`;
       try {
-        await fs.writeFile(temporary, serialized, 'utf8');
+        // Keep a previous valid snapshot, at most once a minute. Never silently
+        // restore it: rolling a purchase ledger back requires an explicit audit.
+        if (Date.now() - this.lastBackupAt >= 60_000) {
+          try {
+            const previous = await fs.readFile(this.file, 'utf8');
+            JSON.parse(previous);
+            const backupTemp = temporary + '.backup';
+            const backupHandle = await fs.open(backupTemp, 'wx');
+            try { await backupHandle.writeFile(previous, 'utf8'); await backupHandle.sync(); }
+            finally { await backupHandle.close(); }
+            try { await renameWithRetry(backupTemp, this.file + '.last-good'); }
+            finally { await fs.unlink(backupTemp).catch(error => { if (error.code !== 'ENOENT') throw error; }); }
+          } catch (error) { if (error.code !== 'ENOENT') throw error; }
+          this.lastBackupAt = Date.now();
+        }
+        const handle = await fs.open(temporary, 'wx');
+        try { await handle.writeFile(serialized, 'utf8'); await handle.sync(); }
+        finally { await handle.close(); }
         await renameWithRetry(temporary, this.file);
         this.saveStats.writes += 1;
         this.saveStats.lastWriteAt = new Date().toISOString();

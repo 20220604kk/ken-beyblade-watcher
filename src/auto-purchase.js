@@ -10,7 +10,9 @@ import { fillEsliteBatchCart, verifyEsliteBatchQuote } from './eslite-batch-cart
 import { prepareEsliteAccountViaApi, readEsliteMemberDetail, resolveEsliteCheckoutSelection } from './eslite-account-setup.js';
 import { PICKUP_SETUP_REQUIRED } from './pickup-setup.js';
 import { isEsliteAccountSlot, esliteAccountSlots, esliteSlotIndex } from './eslite-account-slots.js';
-import { classifyEsliteLogin, readEsliteLoginState } from './eslite-login-state.js';
+import { classifyEsliteLogin, readEsliteLoginState, summarizeEsliteAuthReply } from './eslite-login-state.js';
+import { normalizeEsliteBrowserSession, saveEsliteBrowserSession } from './eslite-browser-session.js';
+import { clearInvalidEsliteAuth, seedEsliteAuthOnce, prepareExpiredEsliteAuthBeforeNavigation } from './eslite-auth-cleanup.js';
 import { safePurchaseText, purchaseErrorSummary, safePurchaseStep } from './purchase-diagnostics.js';
 import { readAndReleaseResponse, releaseResponse } from './api-response.js';
 import { clearFunboxCart, readFunboxCart, reconcileFunboxCart, assertFunboxCheckoutRows } from './funbox-cart.js';
@@ -1144,6 +1146,8 @@ class BrowserPurchaseAdapter {
   }
 
   async close() {
+    await this.accountBrowser?.browser.close().catch(() => {});
+    this.accountBrowser = null;
     await this._closeInteractiveLogin();
     await this.browser?.close().catch(() => {});
     this.browser = null;
@@ -1159,12 +1163,48 @@ class BrowserPurchaseAdapter {
     await session.context?.close().catch(() => {});
   }
 
-  async _keepInteractiveLogin({ context, page, sessionFile, label, error, validate, onValidated = () => {}, onAfterClose = () => {}, watchSameUrl = false, checkIntervalMs = 2000 }) {
+  async openAccountBrowser(onClosed = () => {}) {
+    if (this.accountBrowser && !this.accountBrowser.page.isClosed()) {
+      await this.accountBrowser.page.bringToFront();
+      return { ok: true, message: '已開啟此帳號的原有視窗；關閉後恢復自動派單。' };
+    }
+    if (this.interactiveLogin?.page && !this.interactiveLogin.page.isClosed()) {
+      await this.interactiveLogin.page.bringToFront();
+      return { ok: true, message: '已顯示此帳號原有的登入視窗；未重複登入。' };
+    }
+    // A separate browser never closes a headless purchase worker. Only this
+    // account's saved state is loaded; changes in a browsing window are not
+    // blindly imported into the purchase session (the user may switch accounts).
+    await fs.access(this.sessionFile);
+    const browser = await this.browserLauncher({ headless: false, channel: 'chrome' });
+    try {
+      const context = await browser.newContext({ storageState: this.sessionFile, locale: 'zh-TW', timezoneId: 'Asia/Taipei' });
+      const page = await context.newPage();
+      const window = { browser, context, page };
+      this.accountBrowser = window;
+      const release = () => { if (this.accountBrowser === window) { this.accountBrowser = null; onClosed(); } };
+      browser.once('disconnected', release);
+      page.once('close', () => { void browser.close().catch(() => {}); });
+      await page.goto(this instanceof EslitePurchaseAdapter ? 'https://www.eslite.com/member/orders' : 'https://shop.funbox.com.tw/account',
+        { waitUntil: 'domcontentloaded', timeout: 25000 });
+      return { ok: true, message: '已載入此帳號已保存的登入資料；不送帳密、不清車。此帳號暫停派單至視窗關閉；若官方憑證已到期，仍需重新登入。' };
+    } catch (error) {
+      await browser.close().catch(() => {});
+      this.accountBrowser = null;
+      throw error;
+    }
+  }
+
+  async _keepInteractiveLogin({ context, page, sessionFile, label, error, validate, onValidated = () => {}, onAfterClose = () => {}, watchSameUrl = false, checkIntervalMs = 2000, keepOnBusy = false }) {
+    if (page.isClosed?.()) {
+      await context.close().catch(() => {});
+      return { ok: false, pending: false, message: `${label} 登入視窗已關閉，未保存憑證；請重新開啟登入。` };
+    }
     const sequence = ++this.interactiveLoginSequence;
     const initialUrl = page.url();
     const session = {
       sequence, context, page, sessionFile, label, validate,
-      initialUrl, timer: null, validating: false
+      initialUrl, timer: null, validating: false, keepOnBusy
     };
     this.interactiveLogin = session;
 
@@ -1174,11 +1214,13 @@ class BrowserPurchaseAdapter {
       this.interactiveLogin = null;
     };
     page.once('close', clearIfCurrent);
+    context.once?.('close', clearIfCurrent);
 
     // Most login flows leave the login URL after the user completes CAPTCHA/SMS.
     // Detect that transition and persist the dedicated browser profile automatically.
     session.timer = setInterval(async () => {
       if (this.interactiveLogin?.sequence !== sequence || session.validating) return;
+      if (page.isClosed?.()) { clearIfCurrent(); return; }
       let currentUrl;
       try {
         currentUrl = page.url();
@@ -1289,7 +1331,7 @@ class BrowserPurchaseAdapter {
     return removed;
   }
 
-  async maintainSession({ clearCart = true } = {}) {
+  async maintainSession({ clearCart = false } = {}) {
     if (this.interactiveLogin) {
       return { ok: false, skipped: true, reason: '正在等待人工登入，避免關閉或干擾登入視窗' };
     }
@@ -1460,6 +1502,8 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
   activePurchaseHold() { return this.purchaseHold || this.getPurchaseHold(); }
 
   async maintainSession(options = {}) {
+    if (this.accountBrowser) return { ok: false, skipped: true, reason: '帳號瀏覽器使用中' };
+    options = { clearCart: false, ...options };
     if (options.clearCart !== false && this.activePurchaseHold()) {
       return { ok: false, skipped: true, reason: '訂單結果待核對，禁止保養清車' };
     }
@@ -1494,6 +1538,8 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
 
   runtimeStatus() {
     return {
+      accountBrowserOpen: Boolean(this.accountBrowser),
+      cartActionUncertain: Boolean(this.cartActionUncertain),
       state: !this.warmPoolEnabled
         ? 'disabled'
         : this.warmWorkers.length >= this.workerCount
@@ -1563,6 +1609,7 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async testLogin({ interactive = true } = {}) {
+    if (this.accountBrowser) throw new Error('此帳號瀏覽器已開啟，請先關閉後再更新登入');
     await this._closeInteractiveLogin();
     const context = await this._context(this.sessionFile, { headless: !interactive });
     const page = await context.newPage();
@@ -1709,7 +1756,7 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async _refreshWarmPoolSessions() {
-    if (!this.warmPoolEnabled || this.warmPoolClosed) return;
+    if (!this.warmPoolEnabled || this.warmPoolClosed || this.accountBrowser) return;
     const idleWorkers = this.warmWorkers.filter((worker) => !worker.busy);
     const results = await Promise.allSettled(idleWorkers.map(async (worker) => {
       // 強制定期驗證；補貨真正發生時就不必臨時重新登入。
@@ -1960,6 +2007,7 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async purchase(product, settings) {
+    if (this.accountBrowser || this.cartActionUncertain) throw funboxPurchaseError('account_not_ready', '帳號瀏覽器使用中或清車待確認，未加車、未送單');
     return this.purchaseBatch(settings.batchProducts || [product], settings);
   }
 
@@ -1975,7 +2023,6 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
     };
     let worker, submitted = false;
     try {
-      await emit({label:'購物車清空中',state:'start',stepNumber:1,reason:'使用本帳號 API 讀取購物車；有殘留才清除，確認空車後才加入商品'});
       worker = await this._acquireWarmWorker({apiOnly:true});
       await this._ensureWarmWorkerLogin(worker);
       const remaining = (Math.min(30000, Number(settings.transactionDeadlineMs) || 30000)) - (Date.now() - started);
@@ -1985,12 +2032,9 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
       } });
       const context = { ...worker.context, request: budget.request };
       if (settings.resumeCartUrl) throw funboxPurchaseError('needs_setup','API 任務不沿用未核對的舊購物車');
-      const cleared = await clearFunboxCart(context);
-      this.lastCartClearEvidence = {...cleared,state:'empty_verified'};
-      await emit({label:'購物車已清空並核對',reason:'官方 API 確認沒有殘留商品；下一步只加入本次指定商品',state:'success'});
       await emit({label:'核對派單任務',taskNumber:settings.taskSequence||1,state:'start',reason:`帳號 ${this.accountSlot}；${batch.map(p=>p.title||p.id).join('、')}`});
       if (batch.some(p=>!p.id||!p.url) || new Set(batch.map(p=>p.id)).size!==batch.length) throw funboxPurchaseError('needs_setup','派單商品識別不完整或重複，未加車');
-      await emit({label:'核對派單任務',taskNumber:settings.taskSequence||1,state:'success',reason:settings.batchProducts?'本帳號合單，優先順序已凍結；只清車一次':'帳號與單品任務一致'});
+      await emit({label:'核對派單任務',taskNumber:settings.taskSequence||1,state:'success',reason:settings.batchProducts?'本帳號合單，優先順序已凍結；不自動清車':'帳號與單品任務一致；不自動清車'});
       const expected = [], skippedProducts = [], buildUntil = Date.now() + (settings.batchBuildMs || 8000);
       for (const candidate of batch) {
         if (settings.batchProducts && Date.now() >= buildUntil) { skippedProducts.push({...candidate,reason:'batch_deferred'}); continue; }
@@ -2049,6 +2093,7 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async purchaseBatch(products, settings) {
+    if (this.accountBrowser || this.cartActionUncertain) throw funboxPurchaseError('account_not_ready', '帳號瀏覽器使用中或清車待確認，未加車、未送單');
     if (this.apiAtmCheckout && ['virtual_atm_home','seven_cod'].includes(settings.payment)) {
       return this._purchaseAtmViaApi(products, settings);
     }
@@ -2111,9 +2156,8 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
         // Cyberbiz keeps one server-side cart per account.  Even with one
         // worker per account, an old/manual cart can contaminate the next
         // purchase. Clean exactly once before this account's whole wave.
-        const removedBeforeAdd = await this._clearCart(page, 'https://shop.funbox.com.tw/cart');
-        checkpoint('cartClearedMs');
-        timings.cartItemsRemoved = removedBeforeAdd;
+        // No automatic cart mutation before adding. Final cart reconciliation
+        // still rejects unrelated products or unexpected quantities.
         const addTimeout = batchProducts.length > 1 ? FUNBOX_BATCH_ADD_TIMEOUT_MS : 12000;
         for (let index = 0; index < batchProducts.length; index += 1) {
           const candidate = batchProducts[index];
@@ -2192,7 +2236,6 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
         quantity = Math.max(1, strategy.quantity);
         addedItems.push({ product, quantity });
         await this._login(page, context);
-        await this._clearCart(page, 'https://shop.funbox.com.tw/cart');
         await gotoWithAbortRetry(page, product.url, { waitUntil: 'domcontentloaded', timeout: 25000 });
         if (quantity > 1) await fillFirst(page, ['input[name="quantity"]', 'input[type="number"]'], quantity).catch(() => false);
         const addButton = await firstVisible(page, [
@@ -2548,6 +2591,8 @@ export class MultiAccountFunboxPurchaseAdapter {
     const adapter = this.adapters[slot];
     if (!adapter || !this.queueSlots().includes(slot)) return '帳號未啟用或未設定';
     if (this.accountPurchaseTails.has(slot)) return '帳號忙碌';
+    if (adapter.accountBrowser) return '帳號瀏覽器開啟中，關閉後恢復派單';
+    if (adapter.cartActionUncertain) return '手動清車結果不明，請重新清車確認';
     if (adapter.activePurchaseHold()) return '訂單結果待查證';
     const payment = settings.accountPayments?.[slot] || settings.payment || this.options.getAccountPayment?.(slot) || 'virtual_atm_home';
     if (payment === 'seven_cod' && !adapter.apiAtmCheckout && adapter.getPickupSetup && !adapter.getPickupSetup()) return PICKUP_SETUP_REQUIRED;
@@ -3171,18 +3216,9 @@ export async function purchaseEsliteViaApi({
       ownsApi = true;
     }
     timings.clientReadyMs = now() - startedAt;
-    checkpoint('購物車清空中', '本帳號 API 讀取殘留商品並清除；空車核對成功前不加入新商品', 'start');
     if (!prevalidated) {
-      const reads = await Promise.allSettled([
-        api.get(`/api/v2/member?t=${now()}`, { timeout: timeoutForStep() }),
-        api.get(`/api/v2/cart/items?type=shopping&step=1&d=${now()}`, { timeout: timeoutForStep() })
-      ]);
-      if (reads.some(result => result.status === 'rejected')) {
-        await Promise.all(reads.filter(result => result.status === 'fulfilled').map(result => releaseResponse(result.value)));
-        throw reads.find(result => result.status === 'rejected').reason;
-      }
-      const [memberResponse, cartResponse] = reads.map(result => result.value);
-      timings.sessionAndCartReadyMs = now() - startedAt;
+      checkpoint('核對會員登入', '只確認會員，不讀車、不清車', 'start');
+      const memberResponse = await api.get(`/api/v2/member?t=${now()}`, { timeout: timeoutForStep() });
       try {
       if (memberResponse.status() === 401) throw esliteApiError('誠品登入已失效，請重新登入', 'needs_login');
       if (!memberResponse.ok()) throw esliteApiError(`誠品會員 API 回傳 HTTP ${memberResponse.status()}`, 'rate_limited');
@@ -3190,37 +3226,9 @@ export async function purchaseEsliteViaApi({
       if (!member || !(member.id || member.uuid || member.lms_member_id)) {
         throw esliteApiError('誠品會員 API 沒有回傳可確認的會員身分，保留憑證並停止本次下單', 'unknown');
       }
-      if (!cartResponse.ok()) throw esliteApiError(`誠品購物車 API 回傳 HTTP ${cartResponse.status()}`, 'cart_conflict');
-      const cartBody = await esliteResponseJson(cartResponse);
-      if (!Array.isArray(cartBody?.cart?.cart_items)) throw esliteApiError('購物車資料格式無法確認，未加車、未送單', 'cart_unknown');
-      const existingItems = cartBody.cart.cart_items;
-      if (existingItems.length) {
-        const deletions = await Promise.all(existingItems.map((item) => api.delete('/api/v2/cart/items', {
-          data: { cart_item_id: item.cart_item_id }, timeout: timeoutForStep()
-        })));
-        if (deletions.some((response) => !response.ok())) {
-          throw esliteApiError('誠品既有購物車未能完整清除，已停止下單', 'cart_conflict');
-        }
-        await Promise.all(deletions.map(releaseResponse));
-        if ((await readCart('購物車清空中')).length) throw esliteApiError('清車後仍有殘留商品，未加車、未送單','cart_conflict');
-      }
-      timings.cartClearedMs = now() - startedAt;
-      checkpoint('會員與購物車準備完成', `官方已確認會員身分；${existingItems.length ? `已清除 ${existingItems.length} 筆殘留商品` : '購物車原本為空'}，下一步加入本次指定商品`, 'success');
-      } finally { await Promise.all([releaseResponse(memberResponse), releaseResponse(cartResponse)]); }
-    } else {
-      // A heartbeat's empty-cart snapshot is not a per-task clear confirmation.
-      const existingItems = await readCart('購物車清空中');
-      if (existingItems.length) {
-        const deletions = await Promise.all(existingItems.map(item => api.delete('/api/v2/cart/items', {
-          data:{cart_item_id:item.cart_item_id},timeout:timeoutForStep()
-        })));
-        const rejected=deletions.some(response=>!response.ok());
-        await Promise.all(deletions.map(releaseResponse));
-        if(rejected || (await readCart('購物車清空中')).length) throw esliteApiError('誠品清車未確認完成，未加車','cart_conflict');
-      }
-      timings.sessionAndCartReadyMs = now()-startedAt;
-      timings.cartClearedMs = now()-startedAt;
-      checkpoint('購物車已清空並核對', '官方 API 已重新確認本次空車；不是沿用心跳時的舊空車紀錄', 'success');
+      timings.sessionReadyMs = now() - startedAt;
+      checkpoint('核對會員登入', '會員已確認，直接核對派單並加車', 'success');
+      } finally { await releaseResponse(memberResponse); }
     }
     let quantity = Math.max(1, Math.min(Number(settings.quantity) || 1, Number(product.stock) || 1));
     let batchReceipt = {};
@@ -3267,7 +3275,9 @@ export async function purchaseEsliteViaApi({
     }
     timings.cartAddedMs = now() - startedAt;
     if (!addUncertain) checkpoint('加車確認', `官方回傳指定商品 ${product.title || product.id} ×${quantity}；下一步核對單品購物車，尚未成立訂單`, 'success', { httpStatus: addResponse.status() });
-    if (settings.strictSingleProductOrder || addUncertain) {
+    // Without a pre-task clear, every order must prove exact contents after
+    // adding, even when an older caller omits strictSingleProductOrder.
+    {
       let items = await readCart('核對單品購物車');
       // A timed-out add can commit after the first successful empty read.
       // One bounded delayed read is allowed; never re-add or accept a mixed cart.
@@ -3287,7 +3297,7 @@ export async function purchaseEsliteViaApi({
     }
     }
     if (settings.action !== 'checkout') {
-      return { ...batchReceipt, status: 'carted', quantity, detail: '已由誠品 API 清車並加入指定商品，未送出訂單', timings: completedTimings() };
+      return { ...batchReceipt, status: 'carted', quantity, detail: '已由誠品 API 加入並核對指定商品，未清車、未送出訂單', timings: completedTimings() };
     }
 
     checkpoint('準備結帳資料', '使用本帳號結帳範本，核對付款、配送與收件資料；不借用其他帳號憑證', 'start');
@@ -3327,7 +3337,12 @@ export async function purchaseEsliteViaApi({
     // 「根本尚未送出」誤記成結果不明。
     const checkoutAttemptsLimit = actualPayment === 'line_pay_home' ? 1 : 3;
     for (let attempt = 1; attempt <= checkoutAttemptsLimit; attempt += 1) {
-      const checkoutTimeoutMs = timeoutForStep(15000);
+      // The deadline gates NEW writes. An already dispatched checkout gets
+      // its own bounded observation window, even with only 3s left to dispatch.
+      timeoutForStep(1);
+      const checkoutTimeoutMs = 15000;
+      timings.checkoutResponseBudgetMs = checkoutTimeoutMs;
+      timings.dispatchDeadlineMet = now() < deadlineAt;
       timings.checkoutSubmittedMs ??= now() - startedAt;
       timings.checkoutAttempts = attempt;
       checkpoint('開始送單', `第 ${attempt}/${checkoutAttemptsLimit} 次；使用本帳號的${actualPayment === 'seven_cod' ? '7-11 取貨付款' : actualPayment === 'line_pay_home' ? '宅配 LINE Pay（待付款）' : '宅配 ATM'}結帳資料，同帳號不併發重複送單`, 'start', {attempt});
@@ -3413,7 +3428,7 @@ export async function purchaseEsliteViaApi({
 }
 
 export async function maintainEsliteApiSession(sessionFile, {
-  clearCart = true,
+  clearCart = false,
   requestFactory = playwrightRequest,
   apiContext = null,
   timeoutMs = 8000,
@@ -3448,6 +3463,11 @@ export async function maintainEsliteApiSession(sessionFile, {
     })));
     if (deletions.some((response) => !response.ok())) throw esliteApiError('誠品購物車未能完整清除', 'cart_conflict');
     await Promise.all(deletions.map(releaseResponse));
+    const confirmation = await api.get(`/api/v2/cart/items?type=shopping&step=1&d=${now()}`, { timeout: timeoutMs });
+    const confirmedCart = await esliteResponseJson(confirmation);
+    if (!confirmation.ok() || !Array.isArray(confirmedCart?.cart?.cart_items) || confirmedCart.cart.cart_items.length) {
+      throw esliteApiError('誠品清車後尚未確認空車，請重新檢查', 'cart_unknown');
+    }
     return { ok: true, loggedIn: true, removed: items.length, cartEmpty: true, durationMs: now() - startedAt };
   } finally {
     if (ownsApi) await api?.dispose?.().catch(() => {});
@@ -3522,10 +3542,13 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.apiTokenExpiresAtMs = 0;
     this.apiReadyAtMs = 0;
     this.apiCartKnownEmpty = false;
-    this.sessionRecoveryRunner = options.sessionRecoveryRunner || (() => this._recoverSessionInBackground());
+    this.sessionRecoveryRunner = options.sessionRecoveryRunner || (args => this._recoverSessionInBackground(args));
     this.onSessionProblem = options.onSessionProblem || (() => {});
     this.sessionRecoveryAfterMs = 0;
     this.sessionRecoveryState = 'idle';
+    this.lastBrowserSessionImportedAt = '';
+    this.proactiveRenewalAttemptedExpiryMs = 0;
+    this.loginRecoverySaveQueue = Promise.resolve();
     this.lastSessionAlert = '';
     this.lastTokenExpiresAtMs = 0;
     this.purchaseHold = null;
@@ -3540,21 +3563,51 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       const stored = JSON.parse(await fs.readFile(this.sessionFile, 'utf8'));
       const token = readEsliteAuthToken(stored);
       this.lastTokenExpiresAtMs = esliteTokenExpiryMs(token);
+      const meta = await fs.readFile(`${this.sessionFile}.browser-import-meta.json`, 'utf8').then(JSON.parse).catch(() => null);
+      if (meta?.version === 1 && typeof meta.importedAt === 'string') this.lastBrowserSessionImportedAt = meta.importedAt;
       if ((!token || (this.lastTokenExpiresAtMs && this.lastTokenExpiresAtMs <= Date.now())) && this.loginState === 'idle') {
         this.loginState = 'needs_login';
         this.sessionRecoveryState = 'needs_attention';
         this.lastVerifyError = '本地 API 憑證不存在或已到期；請在專用登入視窗登出後重新登入';
       }
+      const recovery = await fs.readFile(`${this.sessionFile}.login-recovery.json`, 'utf8').then(JSON.parse).catch(() => null);
+      if (recovery?.version === 1 && recovery.tokenExpiryMs === this.lastTokenExpiresAtMs) {
+        this.manualLoginRequired = recovery.manualRequired === true;
+        this.sessionRecoveryAfterMs = Math.max(0, Math.min(Date.now() + 15 * 60000, Number(recovery.afterMs) || 0));
+        this.loginBusyAttempts = Math.max(0, Math.min(5, Number(recovery.busyAttempts) || 0));
+        this.proactiveRenewalAttemptedExpiryMs = Number(recovery.proactiveExpiryMs) || 0;
+        if (this.manualLoginRequired) {
+          this.sessionRecoveryState = 'manual_required';
+          this.lastVerifyError = '上次官方要求人工驗證，已保留暫停；不因重啟反覆送出登入';
+        } else if (this.sessionRecoveryAfterMs > Date.now()) this.sessionRecoveryState = 'retry_pending';
+      }
     } catch { /* No local session yet: keep idle, never infer an API login. */ }
   }
 
-  async _recoverSessionInBackground() {
+  _persistLoginRecovery() {
+    const snapshot = { version: 1, tokenExpiryMs: this.lastTokenExpiresAtMs, manualRequired: this.manualLoginRequired,
+      afterMs: this.sessionRecoveryAfterMs, busyAttempts: this.loginBusyAttempts,
+      proactiveExpiryMs: this.proactiveRenewalAttemptedExpiryMs, at: new Date().toISOString() };
+    this.loginRecoverySaveQueue = this.loginRecoverySaveQueue.catch(() => {}).then(async () => {
+      // Failed browser probes may reset the in-memory expiry. Bind the pause
+      // to the actual saved credential, and never create files for empty fixtures.
+      const stored = await fs.readFile(this.sessionFile, 'utf8').then(JSON.parse).catch(() => null);
+      if (!stored) return;
+      snapshot.tokenExpiryMs = esliteTokenExpiryMs(readEsliteAuthToken(stored));
+      await saveEsliteBrowserSession(`${this.sessionFile}.login-recovery.json`, snapshot);
+    }).catch(() => {
+        this.log('登入冷卻紀錄未能保存；目前暫停狀態仍保留。');
+      });
+    return this.loginRecoverySaveQueue;
+  }
+
+  async _recoverSessionInBackground({ renewAfterExpiryMs = 0 } = {}) {
     // Ordinary first-party login using the existing account profile. No visible
     // window and no CAPTCHA/Cloudflare bypass; those require the account owner.
     const context = await this._loginContext(true);
     try {
       const page = await context.newPage();
-      await this._login(page, context, { interactive: false });
+      await this._login(page, context, { interactive: false, renewAfterExpiryMs });
     } finally {
       await context.close();
       if (this.loginBrowserContext === context) this.loginBrowserContext = null;
@@ -3567,25 +3620,43 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.loginBrowserContext = await this.persistentContextLauncher(this.profileDirectory, {
       headless, channel: 'chrome', locale: 'zh-TW', timezoneId: 'Asia/Taipei'
     });
+    // A verified external-browser import belongs to this same account. The
+    // next official login uses that saved state, not a stale private profile.
+    if (this.lastBrowserSessionImportedAt) {
+      try {
+      const saved = JSON.parse(await fs.readFile(this.sessionFile, 'utf8'));
+      const state = normalizeEsliteBrowserSession(saved).state;
+      await this.loginBrowserContext.addCookies(state.cookies);
+      await this.loginBrowserContext.addInitScript(seedEsliteAuthOnce,
+        { origin: 'https://www.eslite.com', entries: state.origins[0].localStorage, marker: 'eslite-auth-import-' + crypto.randomUUID() });
+      } catch { /* Expired imported tokens do not block normal official login. */ }
+    }
     return this.loginBrowserContext;
   }
 
-  async _recoverApiSession() {
+  async _recoverApiSession({ renewAfterExpiryMs = 0 } = {}) {
     if (this.apiOnly && !this.autoLoginEnabled) {
       this.sessionRecoveryState = 'needs_attention';
       throw esliteApiError('誠品 API 憑證需更新；官方目前沒有已驗證的 refresh API，請在專用登入視窗登出後重新登入，不自動開啟瀏覽器', 'needs_login');
     }
-    if (this.manualLoginRequired) throw esliteApiError('官方要求人工驗證，請開啟專用登入視窗完成；不反覆自動登入', 'human_required');
+    if (this.manualLoginRequired || this.sessionRecoveryState === 'manual_required') throw esliteApiError('官方要求人工驗證，請開啟專用登入視窗完成；不反覆自動登入', 'human_required');
     if (Date.now() < this.sessionRecoveryAfterMs) throw esliteApiError('自動登入冷卻中，稍後自動再查；不重複送出', 'unknown');
     this.sessionRecoveryAfterMs = Date.now() + 15 * 60 * 1000;
     this.sessionRecoveryState = 'recovering';
     this.loginAttemptSubmitted = false;
+    await this._persistLoginRecovery();
     this.log('登入憑證即將到期或已失效，開始背景恢復；不開前景視窗。');
     try {
-      await this.sessionRecoveryRunner();
+      await this.sessionRecoveryRunner({ renewAfterExpiryMs });
+      if (renewAfterExpiryMs) {
+        const saved = JSON.parse(await fs.readFile(this.sessionFile, 'utf8'));
+        const expiry = esliteTokenExpiryMs(readEsliteAuthToken(saved));
+        if (expiry <= renewAfterExpiryMs) throw esliteApiError('官方前端未提供較新的登入憑證，保留原憑證；未延長到期時間', 'unknown');
+        this.lastTokenExpiresAtMs = expiry;
+      }
       await this._disposeApiContext();
       const result = this.autoLoginEnabled ? await this.apiSessionVerifier(this.sessionFile)
-        : await this.apiMaintenanceRunner(this.sessionFile, { apiContext: await this._ensureApiContext(), clearCart: !this.activePurchaseHold(), timeoutMs: 4000 });
+        : await this.apiMaintenanceRunner(this.sessionFile, { apiContext: await this._ensureApiContext(), clearCart: false, timeoutMs: 4000 });
       if (!result.ok || result.loggedIn !== true) throw esliteApiError('背景登入後仍未取得有效會員 API 證據', result.loggedIn === false ? 'needs_login' : 'unknown');
       if (!this.autoLoginEnabled) {
         this.apiCartKnownEmpty = result.cartEmpty === true;
@@ -3595,11 +3666,13 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       this.manualLoginRequired = false;
       this.lastSessionAlert = '';
       this.log('背景登入恢復成功，會員 API 已確認；購物車保持帳號隔離。');
+      await this._persistLoginRecovery();
       return result;
     } catch (error) {
       this.manualLoginRequired = error.purchaseStatus === 'human_required';
       this.sessionRecoveryState = this.manualLoginRequired ? 'manual_required' : 'retry_pending';
       if (error.purchaseStatus === 'login_busy') this._deferBusyLogin(error);
+      await this._persistLoginRecovery();
       throw esliteApiError(`誠品背景登入恢復未完成：${conciseAutomationError(error)}`, error.purchaseStatus || (this.autoLoginEnabled ? 'unknown' : 'needs_login'));
     }
   }
@@ -3619,7 +3692,6 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
   _apiReady(nowMs = Date.now()) {
     return Boolean(
       this.apiContext
-      && this.apiCartKnownEmpty
       && this.apiReadyAtMs > 0
       && (this.apiOnly ? this.loginState === 'ready' && !this.interactiveLogin
         : nowMs - this.apiReadyAtMs <= ESLITE_API_READY_TTL_MS)
@@ -3641,8 +3713,11 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.sessionHeartbeatTimer = null;
     if (!this.sessionHeartbeatEnabled) return;
     let safeDelayMs = Math.max(1000, Number(delayMs) || this._heartbeatIntervalMs());
-    if (this.lastTokenExpiresAtMs > Date.now() && Date.now() >= this.sessionRecoveryAfterMs) safeDelayMs = Math.min(safeDelayMs,
-      Math.max(1000, this.lastTokenExpiresAtMs - Date.now() - (this.apiOnly ? 0 : ESLITE_SESSION_RENEW_AHEAD_MS)));
+    if (this.lastTokenExpiresAtMs > Date.now() && Date.now() >= this.sessionRecoveryAfterMs) {
+      const renewAhead = this.autoLoginEnabled && this.proactiveRenewalAttemptedExpiryMs !== this.lastTokenExpiresAtMs
+        ? ESLITE_SESSION_RENEW_AHEAD_MS : 0;
+      safeDelayMs = Math.min(safeDelayMs, Math.max(60_000, this.lastTokenExpiresAtMs - Date.now() - renewAhead));
+    }
     this.nextVerifyAt = new Date(Date.now() + safeDelayMs).toISOString();
     this.sessionHeartbeatTimer = setTimeout(async () => {
       this.sessionHeartbeatTimer = null;
@@ -3751,6 +3826,8 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     try { paymentSelection = resolveEsliteCheckoutSelection({ template: this.getCheckoutTemplate(), payment: this.getSelectedPayment(),
       deliveryProfile: this.getDeliveryProfile(), pickupUnavailable: Boolean(this.getPickupSetup && !this.getPickupSetup()) }); } catch {}
     return {
+      accountBrowserOpen: Boolean(this.accountBrowser),
+      cartActionUncertain: Boolean(this.cartActionUncertain),
       state: this.accountBusy ? 'busy' : this.loginState,
       interactiveLoginOpen: Boolean(this.interactiveLogin),
       loginState: this.loginState,
@@ -3774,6 +3851,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         : new Date(this.apiReadyAtMs + ESLITE_API_READY_TTL_MS).toISOString()) : '',
       tokenExpiresAt: this.lastTokenExpiresAtMs ? new Date(this.lastTokenExpiresAtMs).toISOString() : '',
       sessionRecoveryState: this.sessionRecoveryState,
+      browserSessionImportedAt: this.lastBrowserSessionImportedAt,
       recoveryAfter: this.sessionRecoveryAfterMs ? new Date(this.sessionRecoveryAfterMs).toISOString() : '',
       purchaseHold: this.activePurchaseHold(),
       checkoutTemplateReady: Boolean(this.getCheckoutTemplate()?.checkout),
@@ -3793,11 +3871,13 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     };
   }
 
-  _markLoginReady() {
+  _markLoginReady({ keepRecoveryProblem = false } = {}) {
     this.loginState = 'ready';
-    this.sessionRecoveryState = 'idle';
-    this.manualLoginRequired = false;
-    this.loginBusyAttempts = 0;
+    if (!keepRecoveryProblem) {
+      this.sessionRecoveryState = 'idle';
+      this.manualLoginRequired = false;
+      this.loginBusyAttempts = 0;
+    }
     if (this.accountPreparationState === 'human_required') {
       this.accountPreparationState = 'retry_pending';
       this.accountPreparationError = '';
@@ -3806,6 +3886,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.nextVerifyAt = new Date(Date.now() + this._heartbeatIntervalMs()).toISOString();
     this.lastVerifyError = '';
     this.lastSessionAlert = '';
+    void this._persistLoginRecovery();
   }
 
   _markLoginProblem(error, state = 'error') {
@@ -3824,7 +3905,22 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.sessionRecoveryAfterMs = Date.now() + seconds * 1000;
     this._markLoginProblem(error, 'unknown');
     this.log(`登入忙碌｜${seconds} 秒後背景重試；不清除憑證、不操作購物車。`);
+    void this._persistLoginRecovery();
     this._scheduleHeartbeat(seconds * 1000);
+  }
+
+  async _closeBusyLoginForRetry(error, context) {
+    // A busy rejection is not an interactive challenge. Release only this
+    // login attempt before arming the heartbeat; never leave its own guard
+    // blocking the retry it just scheduled.
+    if (this.interactiveLogin?.context === context) await this._closeInteractiveLogin();
+    else await context.close().catch(() => {});
+    if (this.loginBrowserContext === context) this.loginBrowserContext = null;
+    this._deferBusyLogin(error);
+    await this.loginRecoverySaveQueue;
+    return { ok: false, pending: false, retryScheduled: true,
+      nextRetryAt: new Date(this.sessionRecoveryAfterMs).toISOString(),
+      message: this.lastVerifyError + '；本次登入視窗已關閉，冷卻後自動背景重試，不需手動按登入。' };
   }
 
   async _withAccountLock(work) {
@@ -3839,6 +3935,43 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       this.accountBusy = Math.max(0, this.accountBusy - 1);
       release();
     }
+  }
+
+  async importBrowserSession(storageState) {
+    if (this.accountBusy || this.sessionVerifyRunning || this.activePurchaseHold()) {
+      throw esliteApiError('本帳號正在執行或有待核對訂單，暫不能同步登入', 'account_not_ready');
+    }
+    return this._withAccountLock(async () => {
+      const account = this.getCredentials().account;
+      if (!account) throw esliteApiError('本帳號尚未設定，不能同步登入', 'needs_setup');
+      const candidate = normalizeEsliteBrowserSession(storageState);
+      const existing = await fs.readFile(this.sessionFile, 'utf8').then(JSON.parse).catch(() => null);
+      if (esliteTokenExpiryMs(readEsliteAuthToken(existing)) > candidate.expiresAtMs) {
+        throw esliteApiError('軟體已有較新的登入憑證，不以較舊瀏覽器狀態覆蓋', 'unknown');
+      }
+      const verified = await verifyEsliteStorageState(candidate.state, { requestFactory: this.loginRequestFactory,
+        timeoutMs: 8000, expectedAccount: account });
+      if (!verified.ok || verified.loggedIn !== true) {
+        throw esliteApiError(verified.reason || '會員 API 未確認同一帳號，未覆寫登入資料', 'unknown');
+      }
+      if (this.getCredentials().account !== account || this.activePurchaseHold()) throw esliteApiError('帳號設定／任務已變更，未覆寫登入', 'account_not_ready');
+      // Stop the old private-window watcher before it can overwrite the new
+      // file. The ordinary Chrome tab is not owned by this adapter or closed.
+      await this._closeInteractiveLogin();
+      await saveEsliteBrowserSession(this.sessionFile, candidate.state);
+      await this._disposeApiContext();
+      this.lastTokenExpiresAtMs = candidate.expiresAtMs;
+      this.lastBrowserSessionImportedAt = new Date().toISOString();
+      await fs.writeFile(`${this.sessionFile}.browser-import-meta.json`, JSON.stringify({ version: 1, importedAt: this.lastBrowserSessionImportedAt }), 'utf8');
+      this.sessionRecoveryAfterMs = 0; this.proactiveRenewalAttemptedExpiryMs = 0;
+      this._markLoginReady();
+      await this.loginRecoverySaveQueue;
+      this.lastHeartbeatResult = '普通 Chrome 登入已同步，會員 API 與帳號身分已確認';
+      if (this.sessionHeartbeatEnabled) this._scheduleHeartbeat();
+      this.log('普通 Chrome 登入同步成功；只更新本帳號登入資料，未清車、未加車、未送單。');
+      return { ok: true, loggedIn: true, accountSlot: this.accountSlot, expiresAt: new Date(candidate.expiresAtMs).toISOString(),
+        message: `誠品帳號 ${this.accountSlot} 已同步普通 Chrome 登入；會員 API 200 與帳號身分核對成功，未清車／送單。` };
+    });
   }
 
   scheduleAccountPreparation({ payment } = {}) {
@@ -3926,7 +4059,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
 
   async verifyStoredSession({ source = 'manual', loginOnly = false } = {}) {
     await this.localSessionLoad;
-    if (this.sessionVerifyRunning || this.accountBusy || this.interactiveLogin) {
+    if (this.sessionVerifyRunning || this.accountBusy || this.interactiveLogin || this.accountBrowser) {
       return { ok: false, skipped: true, reason: this.interactiveLogin ? 'interactive_login' : 'busy' };
     }
     const { account, password } = this.getCredentials();
@@ -3946,19 +4079,23 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       let result = this.customApiSessionVerifier || loginOnly
         ? await this.apiSessionVerifier(this.sessionFile)
         : await this.apiMaintenanceRunner(this.sessionFile, {
-          clearCart: !this.activePurchaseHold() && !this.apiCartKnownEmpty,
+          clearCart: false,
           expectedAccount: this.verifyAccountIdentity ? this.getCredentials().account : undefined,
           apiContext: await this._ensureApiContext(),
           timeoutMs: 2500
         });
-      if (!this.apiOnly && !this.customApiSessionVerifier && this.lastTokenExpiresAtMs > 0
+      if ((!this.apiOnly || this.autoLoginEnabled) && !this.customApiSessionVerifier && this.lastTokenExpiresAtMs > Date.now()
         && this.lastTokenExpiresAtMs - Date.now() <= ESLITE_SESSION_RENEW_AHEAD_MS
+        && this.proactiveRenewalAttemptedExpiryMs !== this.lastTokenExpiresAtMs && !this.manualLoginRequired
         && Date.now() >= this.sessionRecoveryAfterMs) {
+        this.proactiveRenewalAttemptedExpiryMs = this.lastTokenExpiresAtMs;
+        const workingExpiry = this.lastTokenExpiresAtMs;
         try {
-          result = await this._recoverApiSession();
+          result = await this._recoverApiSession({ renewAfterExpiryMs: workingExpiry });
         } catch (error) {
           // A proactive renewal failure is not proof the existing token expired.
-          if (this.lastTokenExpiresAtMs <= Date.now()) throw error;
+          if (workingExpiry <= Date.now()) throw error;
+          this.lastTokenExpiresAtMs = workingExpiry;
           this._alertSessionProblem(error);
           this.log('提前更新尚未完成；原憑證仍有效，保留已確認登入狀態。');
         }
@@ -3971,7 +4108,8 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         if (result.cartEmpty !== null) this.apiCartKnownEmpty = result.cartEmpty === true;
         this.apiReadyAtMs = Date.now();
       }
-      this._markLoginReady();
+      this._markLoginReady({ keepRecoveryProblem: this.proactiveRenewalAttemptedExpiryMs === this.lastTokenExpiresAtMs
+        && ['manual_required', 'retry_pending'].includes(this.sessionRecoveryState) });
       this.lastHeartbeatResult = `登入正常（API ${result.durationMs || 0}ms）`;
       return { ok: true, loggedIn: true, durationMs: result.durationMs || 0 };
     } catch (error) {
@@ -3984,7 +4122,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
             return { ok: true, loggedIn: true, recovered: true, durationMs: recovered.durationMs || 0 };
           } catch (recoveryError) { error = recoveryError; }
         }
-        this.sessionRecoveryState = error.purchaseStatus === 'human_required' ? 'manual_required'
+        this.sessionRecoveryState = error.purchaseStatus === 'human_required' || this.manualLoginRequired ? 'manual_required'
           : this.autoLoginEnabled ? 'retry_pending' : 'needs_attention';
         this._markLoginProblem(error, ['unknown', 'login_busy'].includes(error.purchaseStatus) ? 'unknown' : 'needs_login');
         this.lastHeartbeatResult = conciseAutomationError(error);
@@ -4035,13 +4173,30 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     ]);
   }
 
-  async _login(page, context, { interactive = false, manualOnly = false } = {}) {
+  async _recordLoginDiagnostic(page, state, stage, interactive, authReply = null, authCleanup = null) {
+    const diagnostic = { at: new Date().toISOString(), accountSlot: this.accountSlot,
+      stage, mode: interactive ? 'visible' : 'background', status: state.status,
+      signal: state.signal || 'page_text', message: state.message,
+      ...(authReply ? {authReply} : {}),...(authCleanup ? {authCleanup} : {}) };
+    this.log(`登入判讀｜${stage}｜${diagnostic.mode}｜${diagnostic.status}｜${diagnostic.signal}`);
+    try {
+      const directory = path.join(this.dataDir, 'diagnostics');
+      await fs.mkdir(directory, { recursive: true });
+      const base = path.join(directory, `eslite-login-${this.accountSlot}-latest`);
+      await fs.writeFile(base + '.json', JSON.stringify(diagnostic, null, 2));
+      if (typeof page.screenshot === 'function') await page.screenshot({ path: base + '.png', fullPage: false,
+        mask: [page.locator('input[type="password"], input[autocomplete="current-password"]')] });
+    } catch { /* Diagnostics must not alter authentication or hide its result. */ }
+  }
+
+  async _login(page, context, { interactive = false, manualOnly = false, renewAfterExpiryMs = 0 } = {}) {
     const { account, password } = this.getCredentials();
     if (!account || !password) throw esliteApiError('尚未儲存誠品帳密', 'needs_setup');
     this.loginState = 'checking';
     const saveIfValid = async () => {
       try { await this._validateBrowserLoginApi(page); }
       catch (error) { if (error.purchaseStatus === 'needs_login') return false; throw error; }
+      if (renewAfterExpiryMs && this.lastTokenExpiresAtMs <= renewAfterExpiryMs) return false;
       await context.storageState({ path: this.sessionFile, indexedDB: true });
       this._markLoginReady();
       return true;
@@ -4049,14 +4204,42 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     // Never navigate, log out, or send credentials when the existing API token works.
     if (await saveIfValid()) return true;
     const previousExpiry = this.lastTokenExpiresAtMs;
+    let authDiagnostic = null;
+    let authCleanup=null,cleanupMarker='';
+    if(!renewAfterExpiryMs){
+      cleanupMarker='eslite-expired-auth-'+crypto.randomUUID();
+      const prepared=await prepareExpiredEsliteAuthBeforeNavigation({page,context,marker:cleanupMarker});
+      authCleanup={cookiesRemoved:prepared.cookies,localScriptArmed:prepared.localCleanupArmed,localEntriesRemoved:null,preservedValidToken:prepared.preservedValidToken};
+      if(prepared.cookies||prepared.localCleanupArmed)this.log(`首次開啟登入頁前：已移除 ${prepared.cookies} 個確認過期的登入 Cookie${prepared.localCleanupArmed?'；本頁將於官網腳本前核對並清除過期登入儲存':''}。安全驗證資料、有效憑證與購物車保留。`);
+    }
     await page.goto('https://www.eslite.com/login', { waitUntil: 'domcontentloaded', timeout: 25000 });
-    const checkChallenge = async () => {
+    if(authCleanup?.localScriptArmed){
+      try{
+        const count=await page.evaluate(marker=>{if(location.origin!=='https://www.eslite.com')return null;const raw=sessionStorage.getItem(marker);return raw===null?null:Number(raw);},cleanupMarker);
+        if(Number.isInteger(count)&&count>=0&&count<=6)authCleanup.localEntriesRemoved=count;
+      }catch{ /* A navigation failure is not proof that local cleanup ran. */ }
+      this.log(authCleanup.localEntriesRemoved===null?'首次登入頁初始化：尚未確認本頁儲存清理執行，未宣稱已清除。':`首次登入頁初始化：已核對並移除 ${authCleanup.localEntriesRemoved} 項過期登入儲存，未清購物或安全驗證資料。`);
+    }
+    const checkChallenge = async (stage) => {
       const state = await readEsliteLoginState(page);
-      if (state.status !== 'unknown') throw esliteApiError(state.message, state.status);
+      if (state.status !== 'unknown') {
+        await this._recordLoginDiagnostic(page, state, stage, interactive, authDiagnostic,authCleanup);
+        const detail=authDiagnostic ? `（HTTP ${authDiagnostic.httpStatus ?? '未知'}；${({verification_message:'API 回覆提及驗證',credentials_message:'API 回覆提及帳密',account_status_message:'API 回覆提及帳號狀態',busy_message:'API 回覆忙碌',unknown:'API 未明確說明原因'})[authDiagnostic.reasonHint]}）` : '';
+        throw esliteApiError(state.message+detail, state.status);
+      }
       return state;
     };
-    await checkChallenge();
+    await checkChallenge('開啟登入頁');
     if (await saveIfValid()) return true;
+    if (renewAfterExpiryMs) throw esliteApiError('官方前端未自動更新登入憑證；不登出、不提交帳密，保留原 API 登入', 'unknown');
+    // Both probes above returned needs_login (expired/missing token or an
+    // explicit member 401). Do NOT execute this on a busy/blocked/unknown probe.
+    const cleared = await clearInvalidEsliteAuth({ page, context, confirmedInvalid: true });
+    if (cleared.cookies || cleared.entries) {
+      this.log('登入憑證已確認失效：已清除本帳號舊登入 Cookie／token；保留網站安全驗證資料、購物車與訂單。');
+      await page.goto('https://www.eslite.com/login', { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await checkChallenge('移除失效登入資料後');
+    }
     // A stale member shell can redirect /login despite an expired API token.
     // Use the official logout control once; do not manufacture or modify tokens.
     if (!/\/login(?:[/?#]|$)/i.test(page.url())) {
@@ -4065,7 +4248,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       await page.goto('https://www.eslite.com/login', { waitUntil: 'domcontentloaded', timeout: 25000 });
     }
     await page.locator('input[type="password"]').first().waitFor({ state: 'visible', timeout: 10000 }).catch(() => {});
-    await checkChallenge();
+    await checkChallenge('讀取登入表單');
     const userFilled = await fillFirst(page, [
       'input[placeholder="台灣手機/會員卡號/自訂帳號"]', 'input[aria-label="台灣手機/會員卡號/自訂帳號"]',
       'input[placeholder*="手機"]', 'input[autocomplete="username"]', 'input[type="text"]'
@@ -4084,6 +4267,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     }
     const submit = await firstVisible(page, ['button:has-text("登入")', 'button[type="submit"]', 'input[type="submit"]']);
     if (!submit) throw esliteApiError('登入按鈕尚未載入，未送出帳密', 'unknown');
+    await checkChallenge('送出前核對驗證服務');
     this.log('自動登入：官方表單送出一次；等待 API 確認，不操作購物車。');
     this.loginAttemptSubmitted = true;
     let authReply = null;
@@ -4104,12 +4288,24 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       catch { return false; }
     }, previousExpiry, { timeout: 12000 }).catch(() => {});
     if (await saveIfValid()) return true;
-    await checkChallenge();
+    // Read the already received first-party response; never replay a login.
+    // Capture this BEFORE the busy modal short-circuits failure handling.
+    if(authReply){
+      let timer;
+      try {
+        const body=await Promise.race([Promise.resolve().then(()=>authReply.json()).catch(()=>null),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),2000);})]);
+        authDiagnostic=summarizeEsliteAuthReply({url:authReply.url(),method:authReply.request().method(),httpStatus:authReply.status(),body});
+        if(authDiagnostic)this.log(`登入 API 回應｜HTTP ${authDiagnostic.httpStatus}｜${authDiagnostic.endpoint}｜${authDiagnostic.reasonHint}`);
+      } catch { /* Diagnostics must not replace the actual login result. */ }
+      finally {clearTimeout(timer);}
+    }
+    await checkChallenge('登入送出後');
     if (authReply) {
       const state = classifyEsliteLogin({ httpStatus: authReply.status() });
       this.log(`登入回應｜HTTP ${authReply.status()}｜${state.status === 'unknown' ? '待 API 確認' : state.message}`);
-      if (state.status !== 'unknown') throw esliteApiError(state.message, state.status);
+      if (state.status !== 'unknown') { await this._recordLoginDiagnostic(page,state,'登入 API 拒絕',interactive,authDiagnostic,authCleanup);throw esliteApiError(state.message,state.status); }
     }
+    await this._recordLoginDiagnostic(page,{status:'unknown',signal:'auth_reply_unconfirmed',message:'登入送出後尚未取得有效 API 憑證'},'登入送出後',interactive,authDiagnostic,authCleanup);
     throw esliteApiError('登入送出後尚未取得有效 API 憑證；稍後再查，不重複送出', 'unknown');
     } finally { page.off?.('response', observeReply); }
   }
@@ -4119,6 +4315,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async _testLogin({ interactive = true, manualOnly = false } = {}) {
+    if (this.accountBrowser) throw esliteApiError('此帳號瀏覽器已開啟，請先關閉後再更新登入', 'account_not_ready');
     await this.localSessionLoad;
     if (manualOnly && !interactive) throw esliteApiError('手動登入必須使用可見的專用視窗', 'needs_setup');
     if (manualOnly && this.interactiveLogin) return this.completeLogin();
@@ -4157,7 +4354,19 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       this.sessionRecoveryState = 'idle';
       return { ok: true, message: '誠品會員 API 已確認登入成功，私人 session 已儲存。' };
     } catch (error) {
+      // A closed window is neither an official refusal nor proof that the
+      // previous challenge was resolved. Keep that gate until a fresh page or
+      // a valid member API result proves otherwise; do not restart headless.
+      if (page.isClosed?.() || /Target page, context or browser has been closed/i.test(error.message || '')) {
+        await context.close().catch(() => {});
+        if (this.loginBrowserContext === context) this.loginBrowserContext = null;
+        if (this.sessionRecoveryState === 'manual_required') this.manualLoginRequired = true;
+        this._markLoginProblem(esliteApiError('登入視窗已關閉，未取得新憑證；請重新開啟此帳號登入視窗', 'needs_login'), 'needs_login');
+        await this._persistLoginRecovery();
+        return { ok: false, pending: false, message: this.lastVerifyError };
+      }
       if (error.purchaseStatus === 'login_busy') {
+        if (this.autoLoginEnabled && !manualOnly) return this._closeBusyLoginForRetry(error, context);
         this._deferBusyLogin(error);
         if (!interactive) {
           await context.close().catch(() => {});
@@ -4168,9 +4377,12 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         this._markLoginProblem(error, ['unknown', 'login_busy'].includes(error.purchaseStatus) ? 'unknown'
           : /登入|驗證|密碼/.test(error.message) ? 'needs_login' : 'unknown');
         this.manualLoginRequired = error.purchaseStatus === 'human_required';
+        if (this.manualLoginRequired) this.sessionRecoveryState = 'manual_required';
         if (manualOnly && !this.manualLoginRequired) this.sessionRecoveryState = 'interactive';
+        await this._persistLoginRecovery();
         return this._keepInteractiveLogin({
           context, page, sessionFile: this.sessionFile, label: '誠品', error,
+          keepOnBusy: manualOnly || !this.autoLoginEnabled,
           watchSameUrl: true, checkIntervalMs: 10000,
           validate: async (targetPage) => { await this._validateBrowserLoginApi(targetPage); return true; },
           onValidated: async () => { await this._disposeApiContext(); this.sessionRecoveryState = 'idle'; this.manualLoginRequired = false; this._markLoginReady(); },
@@ -4178,6 +4390,11 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         });
       }
       this._markLoginProblem(error, /登入|驗證/.test(error.message) ? 'needs_login' : 'error');
+      if (error.purchaseStatus === 'human_required') {
+        this.manualLoginRequired = true;
+        this.sessionRecoveryState = 'manual_required';
+        await this._persistLoginRecovery();
+      }
       await context.close();
       throw error;
     }
@@ -4200,22 +4417,29 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
       this._markLoginReady();
     }
     else {
-      if (this.interactiveLogin?.page) {
-        const state = await readEsliteLoginState(this.interactiveLogin.page);
+      const session = this.interactiveLogin;
+      if (session?.page) {
+        const state = await readEsliteLoginState(session.page);
+        if (this.interactiveLogin !== session) return { ok: false, pending: false, message: '登入視窗已關閉或更新；未操作新的登入視窗。' };
         this.manualLoginRequired = state.status === 'human_required';
         if (!this.manualLoginRequired && this.accountPreparationState === 'human_required') {
           this.accountPreparationState = 'retry_pending';
           this.accountPreparationError = '';
         }
         if (state.status === 'login_busy') {
+          if (this.autoLoginEnabled && !session.keepOnBusy) {
+            return this._closeBusyLoginForRetry(esliteApiError(state.message, 'login_busy'), session.context);
+          }
           this._deferBusyLogin(esliteApiError(state.message, 'login_busy'));
-          return { ok: false, pending: true, message: state.message + '；專用視窗保留，程式不重送登入。' };
+          this.sessionRecoveryState = 'interactive';
+          return { ok: false, pending: true, message: state.message + '；手動視窗依要求保留，關閉後才可背景重試；目前不重送登入。' };
         }
         if (state.status === 'human_required') this.sessionRecoveryState = 'manual_required';
       }
       if (validationError) result.message = `${conciseAutomationError(validationError)}；登入視窗保持開啟，未清除既有憑證。`;
       this._markLoginProblem(validationError || new Error(result.message),
         this.manualLoginRequired || validationError?.purchaseStatus === 'needs_login' ? 'needs_login' : 'unknown');
+      await this._persistLoginRecovery();
     }
     return result;
   }
@@ -4225,7 +4449,9 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     const storage = await context.storageState({ indexedDB: true });
     const token = readEsliteAuthToken(storage);
     const expiry = esliteTokenExpiryMs(token);
-    this.lastTokenExpiresAtMs = expiry;
+    // A fresh/closed login tab has no token; it must not erase the expiry
+    // evidence of the saved credential displayed in the dashboard.
+    if (expiry) this.lastTokenExpiresAtMs = expiry;
     if (!token || (expiry && expiry <= Date.now())) {
       throw esliteApiError('畫面仍有登入資訊，但 API 憑證不存在或已過期；請在此專用視窗登出，再重新登入', 'needs_login');
     }
@@ -4308,6 +4534,8 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
   }
 
   async maintainSession(options = {}) {
+    if (this.accountBrowser) return { ok: false, skipped: true, reason: '帳號瀏覽器使用中' };
+    options = { clearCart: false, ...options };
     return this._withAccountLock(async () => {
       try {
         if (this.activePurchaseHold() && options.clearCart !== false) throw esliteApiError('此帳號有結果不明訂單，禁止心跳清車；請先人工核對訂單', 'submitted_unconfirmed');
@@ -4344,10 +4572,12 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     this.loginBrowserContext = null;
     await this._disposeApiContext();
     await super.close();
+    await this.loginRecoverySaveQueue;
   }
 
   async purchase(product, settings) {
     return this._withAccountLock(async () => {
+      if (this.accountBrowser || this.cartActionUncertain) throw esliteApiError('帳號瀏覽器使用中或清車待確認，未加車、未送單', 'account_not_ready');
       await this.localSessionLoad;
       const transactionDeadlineAt = Number(settings.apiDeadlineAt) || Date.now() + ESLITE_API_ORDER_WINDOW_MS;
       const preparationSteps = [];
@@ -4380,8 +4610,8 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
           detail: '會員 API 與本地結帳範本已確認；純讀取，沒有加車、送單，也不是成功訂單', timings: { totalMs: result.durationMs || 0 } };
       }
       if (checkoutTemplate && !settings.verifyOnly && !settings.captureCheckoutTemplate) {
-        // Cold account: the transaction reads member + cart concurrently and clears
-        // once. A separate warmup used to clear, then the transaction cleared again.
+        // A verified warm session starts directly with the assigned product.
+        // A cold session only checks membership; neither path clears the cart.
         const sessionPrevalidated = this._apiReady();
         try {
           const remainingDeadlineMs = Math.max(0, transactionDeadlineAt - Date.now());
@@ -4400,21 +4630,11 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
             deadlineMs: remainingDeadlineMs
           });
           if (result.status === 'submitted_unconfirmed') {
-            // Read-only reconciliation: NEVER repeat an ambiguous checkout POST.
+            // Hand off to the coordinator ONLY after preserving this account's
+            // guard. It persists the receipt before scheduling background reads.
+            // No order-history request occupies the shared purchase worker here.
             this.purchaseHold = { productId: product.id, products: result.products, quantity: Number(settings.quantity) || 1, startedAt: transactionStartedAt };
-            progress('送單結果不明／查詢官方訂單', 'start');
-            try {
-              const history = await this.apiOrderReader(await this._ensureApiContext(), {
-                startedAt: transactionStartedAt, maxPages: 1, maxDetails: 6, timeoutMs: 4000, maxDurationMs: 8000
-              });
-              const order = this.purchaseHold.products?.length ? matchEsliteProductOrder(history.orders, this.purchaseHold) : matchEsliteSingleProductOrder(history.orders, this.purchaseHold);
-              if (order) {
-                result = { ...result, ...order, status: 'ordered', reconciled: true,
-                  quantity: result.quantity || Number(settings.quantity) || 1, detail: '官方訂單查詢已確認成立；未重送結帳請求' };
-                this.purchaseHold = null;
-                progress('官方訂單已確認成立', 'success');
-              } else progress('官方查單尚無唯一吻合結果／保留保護', 'unknown');
-            } catch (error) { progress('官方查單暫時無法確認／保留保護', 'unknown', error); }
+            progress('送單結果不明／轉背景查單', 'unknown', '保護原帳號；不重送、不清車，釋放購買工作器給其他帳號');
           }
           if (result.status === 'ordered') {
             this._markLoginReady();
@@ -4483,8 +4703,6 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
     try {
       await this._login(page, context);
       timings.loginReadyMs = Date.now() - purchaseStartedAt;
-      await this._clearCart(page, 'https://www.eslite.com/cart');
-      timings.cartClearedMs = Date.now() - purchaseStartedAt;
       await page.goto(product.url, { waitUntil: 'domcontentloaded', timeout: 25000 });
       // 商品頁是 Vue 動態渲染；domcontentloaded 時購買按鈕通常尚未掛載。
       // 等待實際按鈕出現，避免把可購商品誤判成無法加入購物車。
@@ -4794,6 +5012,8 @@ export class MultiAccountEslitePurchaseAdapter {
     const adapter = this.adapters[slot];
     if (!adapter || !this.queueSlots().includes(slot)) return '帳號未啟用或未設定';
     if (this.busySlots.has(slot) || adapter.accountBusy) return '帳號忙碌';
+    if (adapter.accountBrowser) return '帳號瀏覽器開啟中，關閉後恢復派單';
+    if (adapter.cartActionUncertain) return '手動清車結果不明，請重新清車確認';
     if (this.busySlots.size >= 3) return '等待可用下單線路';
     if (adapter.activePurchaseHold()) return '訂單結果待查證';
     const selectedPayment = settings.accountPayments?.[slot] || settings.payment || this.getAccountPayment(slot);
@@ -5011,6 +5231,16 @@ export class MultiAccountEslitePurchaseAdapter {
     };
   }
 
+  async importBrowserSession({ accountSlot, storageState } = {}) {
+    this._syncAccounts();
+    const slot = String(accountSlot || '').toUpperCase();
+    if (!isEsliteAccountSlot(slot) || !this.adapters[slot]) throw new Error('誠品帳號欄位不存在');
+    if (this.busySlots.has(slot)) throw new Error('此帳號正在下單，不能同步登入');
+    const result = await this.adapters[slot].importBrowserSession(storageState);
+    if (result.ok && this.accountSetupEnabled) this.scheduleAccountPreparation(slot);
+    return result;
+  }
+
   async maintainSession(options = {}) {
     const entries = this._enabledEntries();
     if (!entries.length) return { ok: false, skipped: true, reason: '尚未啟用任何誠品帳號' };
@@ -5136,6 +5366,7 @@ export class AutoPurchaseCoordinator {
         reason: purchaseErrorSummary(record.paymentFallback.reason) } } : {}),
       orderId: record.orderId || '', startedAt: record.startedAt, completedAt: record.completedAt,
       reconciled: record.reconciled === true, resolvedAt: record.resolvedAt || '', previousStatus: record.previousStatus || '',
+      resolutionSource: record.resolutionSource || '', orderCheck: record.orderCheck || null,
       durationMs: record.durationMs, error: record.error ? conciseAutomationError(record.error) : '',
       taskId: record.taskId || '', steps: (record.steps || []).map(safePurchaseStep),
       detail: safePurchaseText(record.detail),
@@ -5393,7 +5624,7 @@ export class AutoPurchaseCoordinator {
     const slot = CART_MAINTENANCE_TIMES.find((time) => time <= currentMinute
       && !storage.maintenance.completedSlots[day][time]);
     if (!slot) return { skipped: true, reason: 'not_due' };
-    const result = await this.runMaintenance({ clearCart: true, reason: `每日 ${slot}` });
+    const result = await this.runMaintenance({ clearCart: false, reason: `每日 ${slot}` });
     if (!result.deferred) {
       storage.maintenance.completedSlots[day][slot] = new Date().toISOString();
       const oldDays = Object.keys(storage.maintenance.completedSlots).sort().slice(0, -7);
@@ -6399,8 +6630,80 @@ export class AutoPurchaseCoordinator {
     if (!adapter) throw new Error('不支援這個購物平台');
     return adapter.testLogin({
       interactive: options.interactive !== false,
-      accountSlot: options.accountSlot
+      accountSlot: options.accountSlot,
+      manualOnly: options.manualOnly === true
     });
+  }
+
+  async accountAction({ platform, accountSlot, action } = {}) {
+    if (action === 'clear-all-carts') return this.clearAllAccountCarts(platform);
+    if (!['funbox', 'eslite'].includes(platform) || !isEsliteAccountSlot(accountSlot)
+      || !['clear-cart', 'open-browser'].includes(action)) throw new Error('平台、帳號或操作不正確');
+    const multi = this.adapters[platform];
+    multi?._syncAccounts();
+    const adapter = multi?.adapters[accountSlot];
+    if (!adapter?.credentialsStatus().ready) throw new Error('此帳號尚未設定');
+    if (this.maintenanceRunning || this.activeEsliteSlots?.has(`${platform}:${accountSlot}`) || multi.busySlots?.has(accountSlot) || multi.accountPurchaseTails?.has(accountSlot)
+      || adapter.accountBusy || adapter.sessionVerifyRunning || adapter.warmWorkerCreating
+      || adapter.warmWorkers?.some(worker => worker.busy)) throw new Error('此帳號正在執行，請稍後再試');
+    if (action === 'clear-cart' && (adapter.activePurchaseHold() || adapter.accountBrowser || adapter.interactiveLogin)) {
+      throw new Error('此帳號有待核對訂單或瀏覽器使用中，禁止清車；請先核對並關閉視窗');
+    }
+    // Reserve synchronously before the first await. A queued purchase must
+    // never slip between the guard and an account-level cart mutation.
+    let release;
+    const reservation = new Promise(resolve => { release = resolve; });
+    multi.accountPurchaseTails?.set(accountSlot, reservation);
+    multi.busySlots?.add(accountSlot);
+    try {
+      if (action === 'open-browser') return await adapter.openAccountBrowser(() => { void this._schedule(); });
+      let result;
+      try {
+        if (platform === 'eslite') result = await adapter.maintainSession({ clearCart: true });
+        else {
+          let worker;
+          try {
+            worker = await adapter._acquireWarmWorker({ apiOnly: true });
+            await adapter._ensureWarmWorkerLogin(worker);
+            const evidence = await clearFunboxCart(worker.context);
+            adapter.lastCartClearEvidence = { ...evidence, state: 'empty_verified' };
+            result = { ok: true, removed: evidence.removed };
+          } finally { await adapter._releaseWarmWorker(worker); }
+        }
+        if (!result.ok) throw new Error(result.error || result.reason || '官方尚未確認清車完成');
+        adapter.cartActionUncertain = false;
+      } catch (error) { adapter.cartActionUncertain = true; error.cartClearAttempted = true; throw error; }
+      return { ok: true, removed: result.removed || 0, message: `${PLATFORM_LABELS[platform]} 帳號 ${accountSlot}：已清空並由官方重新確認，移除 ${result.removed || 0} 款商品；未送單。` };
+    } finally {
+      release();
+      if (multi.accountPurchaseTails?.get(accountSlot) === reservation) multi.accountPurchaseTails.delete(accountSlot);
+      multi.busySlots?.delete(accountSlot);
+      void this._schedule();
+    }
+  }
+
+  async clearAllAccountCarts(platform) {
+    if (!['funbox', 'eslite'].includes(platform)) throw new Error('不支援這個購物平台');
+    const multi = this.adapters[platform];
+    multi?._syncAccounts();
+    const entries = Object.entries(multi?.adapters || {}).filter(([, adapter]) => adapter.credentialsStatus().ready);
+    // Launch synchronously: accountAction reserves each idle slot before its
+    // first await. Busy/held slots are skipped, never queued for a later clear.
+    const results = await Promise.all(entries.map(async ([accountSlot]) => {
+      try {
+        const result = await this.accountAction({ platform, accountSlot, action: 'clear-cart' });
+        return { accountSlot, status: 'cleared', removed: result.removed || 0 };
+      } catch (error) {
+        return { accountSlot, status: error.cartClearAttempted ? 'failed' : 'skipped', reason: purchaseErrorSummary(error) };
+      }
+    }));
+    const cleared = results.filter(item => item.status === 'cleared').length;
+    const skipped = results.filter(item => item.status === 'skipped').length;
+    const failed = results.filter(item => item.status === 'failed').length;
+    const removed = results.reduce((sum, item) => sum + (item.removed || 0), 0);
+    const details = results.filter(item => item.status !== 'cleared').map(item => `${item.accountSlot}：${item.reason}`).join('；');
+    return { ok: failed === 0 && skipped === 0, results, cleared, skipped, failed, removed,
+      message: `${PLATFORM_LABELS[platform]} 全清完成：${cleared}/${entries.length} 個帳號已確認空車，移除 ${removed} 款；跳過 ${skipped}、失敗 ${failed}。${details ? ' ' + details : ''}${entries.length ? '' : ' 尚無已設定帳號。'}` };
   }
 
   async completeLogin(platform, options = {}) {
@@ -6552,36 +6855,77 @@ export class AutoPurchaseCoordinator {
     }
   }
 
-  async resolveEsliteHold({ accountSlot, confirmedNoOrder } = {}) {
+  _syncEsliteRecordCopies(record) {
+    const storage = this._storage();
+    const same = item => item.platform === 'eslite' && item.accountSlot === record.accountSlot
+      && (record.taskId ? item.taskId === record.taskId : item.startedAt === record.startedAt && item.product?.id === record.product?.id);
+    const copies = storage.recent.filter(same);
+    for (const copy of copies) Object.assign(copy, structuredClone(record));
+    if (!copies.length) storage.recent.unshift(structuredClone(record));
+    storage.recent = storage.recent.slice(0, 30);
+  }
+
+  async resolveEsliteHold({ accountSlot, confirmedNoOrder, taskId, taskIds } = {}) {
     const slot = String(accountSlot || '').toUpperCase();
     if (!isEsliteAccountSlot(slot) || confirmedNoOrder !== true) {
       throw new Error('必須先人工核對官方會員訂單，確認沒有成立訂單後，才能解除保護。');
     }
-    const adapter = this.adapters.eslite?.adapters?.[slot];
-    if (!adapter || adapter.accountBusy || this.adapters.eslite.busySlots.has(slot)) {
+    if (taskIds != null && !Array.isArray(taskIds)) throw new Error('請提供明確的任務清單');
+    const targets = [...new Set(taskId ? [taskId] : taskIds || [])];
+    if (!targets.length || targets.length > 100 || targets.some(id => typeof id !== 'string' || !id || id.length > 250)) {
+      throw new Error('請選擇要確認未成立的那筆任務，不能直接解除整個帳號的新訂單。');
+    }
+    const multi = this.adapters.eslite, adapter = multi?.adapters?.[slot];
+    if (!adapter || adapter.accountBusy || multi.busySlots.has(slot) || adapter.sessionVerifyRunning
+      || this.activeEsliteSlots.has(`eslite:${slot}`)) {
       throw new Error('此帳號正在處理，請稍後再解除保護。');
     }
-    return adapter._withAccountLock(async () => {
+    multi.busySlots.add(slot);
+    try { return await adapter._withAccountLock(async () => {
+      const identity = multi.accountIdentity?.(slot) || '';
       const records = Object.values(this._storage().records).filter((record) =>
-        record.platform === 'eslite' && record.accountSlot === slot && record.status === 'submitted_unconfirmed');
-      const reservationsBackup = structuredClone(this._ledger().data.reservations);
+        record.platform === 'eslite' && record.accountSlot === slot && record.status === 'submitted_unconfirmed'
+        && targets.includes(record.taskId) && (!record.accountIdentity || record.accountIdentity === identity));
+      if (records.length !== targets.length) throw new Error('這筆任務已更新、已核對或帳號已更換；請重新整理，不會解除其他訂單。');
+      const originals = records.map(record => [record, structuredClone(record)]);
+      const copies = this._storage().recent.filter(item => item.platform === 'eslite' && item.accountSlot === slot && targets.includes(item.taskId))
+        .map(item => [item, structuredClone(item)]);
+      const reservations = this._ledger().data.reservations;
+      const reservationsBackup = new Map(targets.map(id => [id, reservations[id] ? structuredClone(reservations[id]) : null]));
       for (const record of records) {
+        record.previousStatus = record.status;
         record.status = 'manually_confirmed_no_order';
         record.resolvedAt = new Date().toISOString();
-        record.detail = '使用者已核對官方訂單並確認未成立；解除帳號防重送保護。';
+        record.resolutionSource = 'user_confirmed_no_order';
+        record.detail = '使用者已核對官方訂單並確認本筆未成立；釋放本筆額度，不清車、不重送本筆。';
+        record.steps ||= [];
+        record.steps.push(safePurchaseStep({ at: record.resolvedAt, label: '人工確認訂單未成立', state: 'success', stepNumber: 12,
+          stepTitle: '核對正式訂單', reason: record.detail, elapsedMs: Math.max(0, Date.now() - (Date.parse(record.startedAt) || Date.now())) }));
         this._ledger().settle(record.taskId, { status: 'manually_confirmed_no_order' });
       }
+      const recentBefore = [...this._storage().recent];
+      for (const record of records) this._syncEsliteRecordCopies(record);
       try { await this.state.save(); }
       catch (error) {
-        this._ledger().data.reservations = reservationsBackup;
-        for (const record of records) { record.status = 'submitted_unconfirmed'; delete record.resolvedAt; }
+        for (const [id, before] of reservationsBackup) { if (before) reservations[id] = before; else delete reservations[id]; }
+        for (const [record, before] of [...originals, ...copies]) {
+          for (const key of Object.keys(record)) delete record[key]; Object.assign(record, before);
+        }
+        // Remove only snapshots inserted for these targets; preserve updates
+        // another account may have made while persistence was pending.
+        this._storage().recent = this._storage().recent.filter(item => recentBefore.includes(item) || !targets.includes(item.taskId));
         throw error;
       }
-      for (const record of records) await this._recordEsliteAttempt(record);
-      adapter.purchaseHold = null;
+      const remaining = Object.values(this._storage().records).filter(record => record.platform === 'eslite' && record.accountSlot === slot
+        && record.status === 'submitted_unconfirmed' && (!record.accountIdentity || record.accountIdentity === identity));
+      const pending = remaining[0];
+      if (adapter.purchaseHold?.scope !== 'cart_probe') adapter.purchaseHold = pending
+        ? { productId: pending.product?.id, quantity: pending.quantity || 1, startedAt: pending.startedAt } : null;
       adapter._resetApiReadiness();
-      return { message: `帳號 ${slot} 已解除保護，下次購買前會重新核對空車；原時間紀錄保留。` };
-    });
+      for (const record of records) await this._recordEsliteAttempt(record);
+      return { resolved: records.length, pending: remaining.length,
+        message: `帳號 ${slot}：${records.length} 筆已標記「人工確認未成立」，本筆額度已釋放。${pending ? '另有待核對訂單，帳號仍受保護。' : '帳號訂單保護已解除。'}未清車、未重送本筆；原始紀錄保留。` };
+    }); } finally { multi.busySlots.delete(slot); }
   }
 
   _queueHeldEsliteChecks(config) {
@@ -6595,8 +6939,11 @@ export class AutoPurchaseCoordinator {
       const timer = setTimeout(() => {
         this.heldEsliteChecks.delete(slot);
         const work = this._runHeldEsliteCheck(record).catch(error => this.log(`誠品帳號 ${slot} 補查未完成：${purchaseErrorSummary(error)}`));
-        this.heldEsliteWork.add(work); work.finally(() => this.heldEsliteWork.delete(work));
-      }, 30000);
+        this.heldEsliteWork.add(work); work.finally(() => {
+          this.heldEsliteWork.delete(work);
+          this._queueHeldEsliteChecks(normalizeAutoPurchaseConfig(this.getConfig()));
+        });
+      }, record.holdRecheckCount ? 30000 : 1000);
       timer.unref?.(); this.heldEsliteChecks.set(slot, timer);
     }
   }
@@ -6608,10 +6955,18 @@ export class AutoPurchaseCoordinator {
       || !this.esliteRestockTasks?.active() || record.status !== 'submitted_unconfirmed'
       || (record.holdRecheckCount || 0) >= 2 || !adapter || adapter.accountBusy || adapter.interactiveLogin
       || !Number.isFinite(Date.parse(record.startedAt)) || Date.now()-Date.parse(record.startedAt)>5*60000
-      || multi.busySlots?.has(slot) || this.activeWorkers >= this.maxWorkers
+      || multi.busySlots?.has(slot) || this.heldEsliteWork.size >= 2
       || record.accountIdentity && record.accountIdentity !== multi.accountIdentity(slot)) return;
     record.holdRecheckCount = (record.holdRecheckCount || 0) + 1;
     record.holdRecheckAt = new Date().toISOString();
+    // Batch member rows share one checkout task. They must not each acquire
+    // a fresh pair of background attempts after the parent exhausts its limit.
+    for (const copy of Object.values(this._storage().records)) {
+      if (record.taskId && copy.taskId === record.taskId && copy.platform === 'eslite' && copy.accountSlot === slot) {
+        copy.holdRecheckCount = record.holdRecheckCount;
+        copy.holdRecheckAt = record.holdRecheckAt;
+      }
+    }
     await this.state.save();
     try {
       const result = await this.reconcileEsliteAccount({ accountSlot: slot, background: true });
@@ -6637,15 +6992,27 @@ export class AutoPurchaseCoordinator {
     if (!adapter || adapter.accountBusy || multi.busySlots.has(slot)) throw new Error('帳號不存在或正在處理，請稍後再查單');
     const identity = multi.accountIdentity(slot);
     if (!identity) throw new Error('帳號尚未設定');
-    const result = await adapter._withAccountLock(async () => {
+    multi.busySlots.add(slot);
+    let result;
+    try { result = await adapter._withAccountLock(async () => {
       const storage = this._storage();
       const records = Object.values(storage.records).filter(record => record.platform === 'eslite'
         && record.accountSlot === slot && record.status === 'submitted_unconfirmed'
         && (!record.accountIdentity || record.accountIdentity === identity));
       // Import only this authenticated account's official orders. No PII is stored.
-      const history = await adapter.apiOrderReader(await adapter._ensureApiContext(), background ? {
+      let history;
+      try { history = await adapter.apiOrderReader(await adapter._ensureApiContext(), background ? {
         startedAt: records[0]?.startedAt, maxPages: 1, maxDetails: 6, timeoutMs: 3000, maxDurationMs: 6000
-      } : { maxPages: 3, maxDetails: 30, timeoutMs: 5000, maxDurationMs: 20000 });
+      } : { maxPages: 3, maxDetails: 30, timeoutMs: 5000, maxDurationMs: 20000 }); }
+      catch (error) {
+        for (const record of records) {
+          record.orderCheck = { at: new Date().toISOString(), result: 'error', reason: purchaseErrorSummary(error) };
+          this._syncEsliteRecordCopies(record);
+        }
+        await this.state.save();
+        throw error;
+      }
+      if (identity !== multi.accountIdentity(slot)) throw new Error('查單途中帳號已變更；保留待核對，不解除保護');
       storage.eslitePurchased ||= {};
       storage.eslitePurchased[identity] ||= {};
       for (const order of history.orders) for (const item of order.items.filter(item => !item.canceled)) {
@@ -6657,11 +7024,20 @@ export class AutoPurchaseCoordinator {
       for (const record of records) {
         const order = record.products?.length ? matchEsliteProductOrder(history.orders, { products: record.products, startedAt: record.startedAt })
           : matchEsliteSingleProductOrder(history.orders, { productId: record.product.id, quantity: record.quantity || 1, startedAt: record.startedAt });
-        if (!order) continue;
+        record.orderCheck = { at: new Date().toISOString(), result: order ? 'matched' : 'not_found', complete: history.complete === true,
+          reason: order ? '官方找到唯一吻合訂單' : history.complete ? '本次官方查詢無吻合訂單；可人工核對後確認未成立' : '本次查詢範圍不完整；尚無吻合訂單，不代表未成立' };
+        if (!order) { this._syncEsliteRecordCopies(record); continue; }
         record.previousStatus = record.status;
         Object.assign(record, order, { status: 'ordered', reconciled: true, accountIdentity: identity,
           resolvedAt: new Date().toISOString(), detail: '官方會員訂單已確認成立；未重送結帳請求' });
+        if (!background) {
+          record.steps ||= [];
+          record.steps.push(safePurchaseStep({ at: record.resolvedAt, label: '官方查單已確認成立', state: 'success', stepNumber: 12,
+            stepTitle: '核對正式訂單', reason: '官方唯一吻合訂單已保存；本次未重送',
+            elapsedMs: Math.max(0, Date.now() - (Date.parse(record.startedAt) || Date.now())) }));
+        }
         this._ledger().settle(record.taskId, { ...record, items: order.items.map(p=>({id:p.id,quantity:p.quantity})) });
+        this._syncEsliteRecordCopies(record);
         resolved++;
       }
       for (const record of Object.values(storage.records).filter(record => record.platform === 'eslite'
@@ -6681,14 +7057,15 @@ export class AutoPurchaseCoordinator {
         for (const record of records.filter(record => record.reconciled)) record.status = 'submitted_unconfirmed';
         throw error;
       }
-      for (const record of records.filter(record => record.reconciled)) await this._recordEsliteAttempt(record);
+      for (const record of records) await this._recordEsliteAttempt(record);
       if (resolved && !records.some(record => record.status === 'submitted_unconfirmed')) {
         adapter.purchaseHold = null;
         adapter._resetApiReadiness();
       }
-      return { resolved, purchasedCount: Object.keys(storage.eslitePurchased[identity]).length,
-        complete: history.complete, message: `帳號 ${slot}：官方確認 ${resolved} 筆待查訂單，記錄 ${Object.keys(storage.eslitePurchased[identity]).length} 款已購商品。${history.complete ? '' : '僅為限量分頁查詢，不代表完整歷史。'}未查到的待確認訂單不解除保護。` };
-    });
+      const pending = records.filter(record => record.status === 'submitted_unconfirmed').length;
+      return { resolved, pending, purchasedCount: Object.keys(storage.eslitePurchased[identity]).length,
+        complete: history.complete, message: `帳號 ${slot}：查詢完成，找到 ${resolved} 筆吻合訂單。${pending ? `另 ${pending} 筆未找到吻合訂單，仍待確認；若已人工核對沒有訂單，請在該筆按「確認未成立」。` : '目前沒有待核對訂單。'}${history.complete ? '' : ' 本次查詢不完整。'}未清車、未重送。` };
+    }); } finally { multi.busySlots.delete(slot); }
     void this._schedule();
     return result;
   }

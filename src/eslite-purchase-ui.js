@@ -3,18 +3,28 @@ export const esliteTableCss = `
 .eslite-sheet{margin:14px 0 0;min-width:0}.eslite-sheet-heading{display:flex;align-items:center;gap:10px;margin:14px 0 8px;font-size:13px}.eslite-sheet-heading small{font-size:12px;color:#8fa0bd;font-weight:400}.eslite-sheet-scroll{overflow:auto;border:1px solid #2c3948;max-height:430px;background:#121920}.eslite-sheet table{width:100%;border-collapse:separate;border-spacing:0;table-layout:fixed;font-size:12px;line-height:1.45;font-variant-numeric:tabular-nums}.eslite-sheet th,.eslite-sheet td{padding:8px 9px;border-right:1px solid #2c3948;border-bottom:1px solid #2c3948;text-align:left;vertical-align:middle;overflow-wrap:anywhere}.eslite-sheet th:last-child,.eslite-sheet td:last-child{border-right:0}.eslite-sheet tbody tr:last-child td{border-bottom:0}.eslite-sheet th{position:sticky;top:0;z-index:1;background:#202a33;color:#45d9c6;font-weight:600;white-space:nowrap}.eslite-sheet tbody tr:nth-child(even){background:#161f27}.eslite-sheet tbody tr:hover{background:#1c303b}.eslite-sheet .eslite-num{text-align:center}.eslite-sheet .eslite-nowrap{white-space:nowrap}.eslite-sheet .eslite-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.eslite-sheet small{display:block;color:#8fa0bd;font-size:11px;margin-top:2px}.eslite-sheet a{color:#ffd166;text-decoration:none}.eslite-sheet a:hover{text-decoration:underline}.eslite-sheet .eslite-order-product{color:#e7eef8}.eslite-sheet .eslite-warning{color:#ffd166}.eslite-sheet .eslite-actions{display:flex;gap:4px;align-items:center;flex-wrap:wrap}.eslite-sheet button{border:1px solid #35485a;background:#1b2835;border-radius:5px;padding:4px 7px;font-size:11px;white-space:nowrap;font-weight:500}.eslite-sheet button:hover{background:#30465c}.eslite-sheet button[aria-expanded=true]{border-color:#6ba5fc;color:#98c4ff}.eslite-sheet .eslite-empty{text-align:center;padding:18px;color:#8fa0bd}.eslite-sheet .eslite-account-table{min-width:1020px}.eslite-sheet .eslite-queue-table{min-width:720px}.eslite-sheet .eslite-order-table{min-width:1040px}.eslite-sheet-filters{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:8px 0}.eslite-sheet-filters label{font-size:12px;color:#9eabc3;display:flex;align-items:center;gap:6px}.eslite-sheet-filters input,.eslite-sheet-filters select{padding:7px 9px;border-radius:5px;font-size:12px;min-width:0}.eslite-sheet-filters input{width:260px;max-width:100%}.eslite-sheet-filters span{font-size:12px;color:#8fa0bd;margin-left:auto}.eslite-sheet .eslite-step-row td{padding:0;background:#0d1520}.eslite-step-log{max-height:220px;overflow:auto;padding:9px 12px;font-size:12px}.eslite-step-line{display:grid;grid-template-columns:90px 70px minmax(150px,1fr) 90px;gap:10px;padding:4px 0;border-bottom:1px solid #253342}.eslite-step-line:last-child{border:0}.eslite-step-line small{grid-column:3/-1;white-space:pre-wrap}.eslite-step-error{white-space:pre-wrap;color:#ff9898;margin:4px 0 8px}.purchase-hub #eslite-account-list{border:0;background:none;margin:8px 0}.purchase-hub #eslite-account-list .eslite-account-card.compact{display:none}.purchase-hub #eslite-account-list .eslite-account-head-actions{display:none}.purchase-hub #eslite-account-list .funbox-account-head{padding:9px 12px}.purchase-hub .eslite-account-toolbar{border:0;padding:0;background:none;border-radius:0}.purchase-hub .eslite-account-toolbar small{display:none}.purchase-hub .eslite-account-toolbar button{font-size:12px;padding:6px 10px;border-radius:5px}.purchase-hub .eslite-system-details{margin-top:12px;font-size:12px;color:#9eabc3}.purchase-hub .eslite-system-details>summary{cursor:pointer;padding:6px 0}.purchase-hub .eslite-system-details .field{margin-top:8px}.purchase-hub .eslite-system-details button{padding:7px 10px;font-size:12px}.purchase-hub .notice:empty{display:none}.purchase-hub .purchase-rules-fold{margin-top:10px}.purchase-hub .card-heading h2{font-size:14px}.purchase-hub .card{box-shadow:none}.eslite-purchase-controls{font-size:12px}.eslite-purchase-controls button{padding:7px 11px;border-radius:5px;font-size:12px}.eslite-purchase-controls input[type=number]{width:65px;padding:6px 8px}@media(max-width:620px){.eslite-sheet-filters label:first-child{width:100%}.eslite-sheet-filters input{flex:1;width:auto}.eslite-sheet-filters span{margin-left:0}.eslite-step-line{grid-template-columns:75px 60px 1fr 65px;gap:5px}}
 .eslite-sheet-heading{flex-wrap:wrap}.eslite-priority-controls{gap:8px;margin-top:8px;font-size:12px}.eslite-priority-controls input{flex:1;min-width:180px;padding:7px 10px;border-radius:5px;font-size:12px}
 .eslite-step-log{max-height:420px}
+.eslite-sheet .eslite-account-table{min-width:0;width:100%}
+.eslite-sheet .eslite-account-table td{padding:6px;height:46px;box-sizing:border-box;white-space:normal;overflow-wrap:anywhere}
+.eslite-sheet .eslite-account-table th{padding:7px 6px;white-space:normal}
+.eslite-sheet .eslite-account-table .account-browser-link{color:#7eb8ff;text-decoration:underline;text-underline-offset:3px;cursor:pointer;overflow-wrap:anywhere}
+.eslite-sheet .account-browser-link[aria-disabled=true]{color:#8fa0bd;cursor:wait;text-decoration:none}
+.eslite-toolbar-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.eslite-sheet .eslite-account-table .eslite-actions{flex-wrap:nowrap;gap:4px}
+.eslite-sheet .eslite-account-table .eslite-actions button{flex:0 0 auto;min-width:34px;height:26px;padding:3px 6px;line-height:18px;margin:0}
+@media(max-width:1100px){.eslite-sheet .eslite-account-table .eslite-actions{flex-wrap:wrap}}
+@media(max-width:700px){.eslite-sheet .eslite-account-table{font-size:10px}.eslite-sheet .eslite-account-table td,.eslite-sheet .eslite-account-table th{padding:5px 3px}.eslite-sheet .eslite-account-table .eslite-actions{gap:3px}.eslite-sheet .eslite-account-table .eslite-actions button{min-width:0;padding:3px;font-size:10px}.eslite-sheet .eslite-account-table small{font-size:9px}}
 `;
 
 export function esliteAccountRowHtml(slot) {
   return `<tr id="eslite-sheet-account-${slot}">
-<td id="eslite-sheet-identity-${slot}">${slot}</td><td id="eslite-sheet-login-${slot}">—</td><td id="eslite-sheet-api-${slot}">—</td><td id="eslite-sheet-payment-${slot}">—</td><td id="eslite-sheet-pending-${slot}" class="eslite-num">0</td><td id="eslite-sheet-purchased-${slot}" class="eslite-num">—</td><td id="eslite-sheet-heartbeat-${slot}">—</td>
-<td><div class="eslite-actions" id="eslite-sheet-actions-${slot}"><button type="button" onclick="testAutoPurchaseLogin('eslite','${slot}')">登入</button><button type="button" onclick="testAutoPurchaseLogin('eslite','${slot}',true)">手動登入</button><button type="button" onclick="completeAutoPurchaseLogin('eslite','${slot}')">檢查</button><button id="eslite-sheet-settings-${slot}" type="button" aria-expanded="false" aria-controls="eslite-account-${slot}-card" onclick="toggleEsliteAccountCard('${slot}')">帳密設定</button></div></td></tr>`;
+<td id="eslite-sheet-identity-${slot}"><strong>${slot} · <a id="eslite-sheet-browser-${slot}" class="account-browser-link" href="#eslite-account-${slot}-card" title="開啟此帳號瀏覽器；沿用已存登入，關閉後恢復派單" onclick="event.preventDefault();purchaseAccountAction(this,'eslite','${slot}','open-browser')">未設定</a></strong><small id="eslite-sheet-member-${slot}">—</small></td><td id="eslite-sheet-login-${slot}">—</td><td id="eslite-sheet-api-${slot}">—</td><td id="eslite-sheet-payment-${slot}">—</td><td id="eslite-sheet-pending-${slot}" class="eslite-num">0</td><td id="eslite-sheet-purchased-${slot}" class="eslite-num">—</td><td id="eslite-sheet-heartbeat-${slot}">—</td><td id="eslite-sheet-token-${slot}">未取得</td>
+<td><div class="eslite-actions" id="eslite-sheet-actions-${slot}"><button type="button" title="登入／恢復此帳號" onclick="testAutoPurchaseLogin('eslite','${slot}')">登入</button><button type="button" title="開啟手動登入視窗" aria-label="手動登入" onclick="testAutoPurchaseLogin('eslite','${slot}',true)">手動</button><button type="button" title="檢查此帳號登入狀態" onclick="completeAutoPurchaseLogin('eslite','${slot}')">檢查</button><button id="eslite-sheet-settings-${slot}" type="button" title="帳密與付款設定" aria-expanded="false" aria-controls="eslite-account-${slot}-card" onclick="toggleEsliteAccountCard('${slot}')">設定</button></div><small id="eslite-query-result-${slot}" role="status" aria-live="polite"></small></td></tr>`;
 }
 
 export const esliteAccountTableHtml = `
 <div class="eslite-sheet"><div class="eslite-sheet-scroll"><table class="eslite-account-table" aria-label="誠品帳號狀態">
-<colgroup><col style="width:130px"><col style="width:95px"><col style="width:145px"><col style="width:105px"><col style="width:55px"><col style="width:60px"><col style="width:115px"><col style="width:270px"></colgroup>
-<thead><tr><th>帳號</th><th>登入</th><th>下單狀態</th><th>付款</th><th class="eslite-num">待購</th><th class="eslite-num">已購款</th><th>心跳</th><th>操作</th></tr></thead>
+<colgroup><col style="width:16%"><col style="width:6%"><col style="width:15%"><col style="width:10%"><col style="width:4%"><col style="width:5%"><col style="width:6%"><col style="width:13%"><col style="width:25%"></colgroup>
+<thead><tr><th>帳號</th><th>登入</th><th>下單狀態</th><th>付款</th><th class="eslite-num">待購</th><th class="eslite-num">已購款</th><th>心跳</th><th>Token 剩餘／到期</th><th>操作</th></tr></thead>
 <tbody>${['A', 'B', 'C'].map(esliteAccountRowHtml).join('')}</tbody></table></div></div>`;
 
 export const esliteOrderTablesHtml = `
@@ -42,7 +52,9 @@ export function esliteSheetOutcome(item) {
   if (['canceled', 'cancelled'].includes(item.orderStatus || item.status)) return { group: 'canceled', text: '訂單取消', tone: 'bad' };
   if (['shipped', 'completed'].includes(item.orderStatus || item.status) && (item.orderId || item.orderNumber)) return {
     group: 'ordered', text: (item.orderStatus || item.status) === 'completed' ? '訂單完成' : '已出貨', tone: 'ok' };
-  if (item.status === 'submitted_unconfirmed') return { group: 'unknown', text: '待核對', tone: 'eslite-warning' };
+  if (item.status === 'manually_confirmed_no_order') return { group: 'failed', text: '人工確認未成立', tone: 'muted' };
+  if (item.status === 'submitted_unconfirmed') return { group: 'unknown', text: item.orderCheck?.result === 'not_found'
+    ? item.orderCheck.complete ? '查無吻合／待確認' : '查詢不完整／待確認' : item.orderCheck?.result === 'error' ? '查單失敗／待核對' : '待核對', tone: 'eslite-warning' };
   const order = Boolean(item.orderId || item.orderNumber);
   if (order && ['ordered', 'success', 'payment_failed', '3ds_pending'].includes(item.status)) {
     return { group: 'ordered', text: item.paymentStatus === 'payment_paid' ? '已付款' : item.payment==='line_pay_home'?'成立／LINE Pay 待付款':item.status === 'payment_failed' ? '成立／付款失敗' : item.status === '3ds_pending' ? '成立／待驗證' : '訂單成立', tone: 'ok' };
@@ -57,7 +69,7 @@ export function esliteSheetOutcome(item) {
 export function esliteSheetRecords(autoPurchase = {}, filters = {}) {
   const seen = new Set();
   const rows = [];
-  for (const item of [...(autoPurchase.inProgress || []), ...(autoPurchase.recent || []), ...(autoPurchase.esliteOrders || [])]) {
+  for (const item of [...(autoPurchase.inProgress || []), ...(autoPurchase.esliteOrders || []), ...(autoPurchase.recent || [])]) {
     if (item.platform !== 'eslite') continue;
     const key = item.taskId || [item.accountSlot, item.orderId || item.orderNumber || '', item.startedAt || '', item.product?.id || item.product?.title || ''].join('|');
     if (seen.has(key)) continue;
@@ -105,13 +117,15 @@ export function esliteSheetOrderRowsHtml(records, expanded = new Set()) {
     const open = expanded.has(key);
     const quantity = item.quantity ?? item.product?.quantity;
     const product = item.mode === 'batch' && item.products?.length ? item.products.map(p => `${p.title || p.id} ×${p.quantity}`).join(' ＋ ') : item.product?.title || '未命名商品';
+    const confirmation = item.platform === 'eslite' && item.status === 'submitted_unconfirmed' && item.taskId
+      ? '<small><button type="button" data-eslite-no-order="' + e(item.taskId) + '" data-eslite-account="' + e(item.accountSlot) + '" title="只確認這筆任務未成立，不清車、不重送">確認未成立</button></small>' : '';
     return '<tr><td class="eslite-nowrap">' + e(esliteSheetTime(item.completedAt || item.startedAt)) + '</td><td class="eslite-num">' + e(item.accountSlot || '—')
       + '</td><td class="eslite-truncate eslite-order-product" title="' + e(product) + '">' + e(product) + '</td><td class="eslite-num">' + e(quantity ?? '—')
       + '</td><td>' + (href ? '<a target="_blank" rel="noopener noreferrer" href="' + e(href) + '">' + e(orderId) + '</a>' : e(orderId))
       + '</td><td>' + e(payment) + (amount || paymentNote ? '<small>' + e([amount, paymentNote].filter(Boolean).join(' · ')) + '</small>' : '')
       + (paymentHref ? '<small><a target="_blank" rel="noopener noreferrer" href="' + e(paymentHref) + '">付款資訊</a></small>' : '')
       + (item.bankCode && item.bankAccount ? '<small>' + e(item.bankCode + ' · ' + item.bankAccount) + '</small>' : '')
-      + '</td><td class="' + outcome.tone + '" title="' + e(item.orderStatusError ? '補查暫時失敗：' + item.orderStatusError + '；保留上次結果' : item.orderStatusCheckedAt ? '官方查單：' + esliteSheetTime(item.orderStatusCheckedAt) : '尚未更新官方後續狀態') + '">' + e(outcome.text) + '</td><td class="eslite-nowrap">' + (Number.isFinite(item.durationMs) ? (item.durationMs / 1000).toFixed(2) + 's' : '—')
+      + '</td><td class="' + outcome.tone + '" title="' + e(item.orderCheck?.reason || (item.orderStatusError ? '補查暫時失敗：' + item.orderStatusError + '；保留上次結果' : item.orderStatusCheckedAt ? '官方查單：' + esliteSheetTime(item.orderStatusCheckedAt) : '尚未更新官方後續狀態')) + '">' + e(outcome.text) + confirmation + '</td><td class="eslite-nowrap">' + (Number.isFinite(item.durationMs) ? (item.durationMs / 1000).toFixed(2) + 's' : '—')
       + '</td><td><button type="button" data-eslite-step="' + e(key) + '" aria-expanded="' + open + '" aria-label="' + e((open ? '收合' : '查看') + '帳號 ' + (item.accountSlot || '') + ' ' + product + ' 步驟') + '">' + (open ? '收合' : '步驟') + '</button> <button type="button" data-eslite-export="' + e(key) + '" aria-label="匯出此筆完整步驟 TXT">TXT</button></td></tr>'
       + (open ? '<tr class="eslite-step-row"><td colspan="9">' + esliteSheetStepsHtml(item) + '</td></tr>' : '');
   }).join('') || '<tr><td colspan="9" class="eslite-empty">沒有符合條件的紀錄</td></tr>';
@@ -124,7 +138,7 @@ export function esliteAccountReadiness(autoPurchase, account, runtime) {
   if (account.enabled === false) return { text: '已停用', tone: 'muted' };
   const setup = runtime.accountPreparationState;
   if (setup === 'queued' || setup === 'running') return { text: '自動辨識中', tone: 'eslite-warning' };
-  if (runtime.manualLoginRequired || setup === 'human_required') return { text: '需人工驗證', tone: 'eslite-warning' };
+  if (runtime.manualLoginRequired || runtime.sessionRecoveryState === 'manual_required' || setup === 'human_required') return { text: '需人工驗證', tone: 'eslite-warning' };
   if (runtime.sessionRecoveryState === 'retry_pending') return { text: '登入冷卻／待重試', tone: 'eslite-warning' };
   if (runtime.loginState === 'needs_login') return { text: '待登入', tone: 'eslite-warning' };
   if (setup === 'incomplete') return { text: '資料待補', tone: 'eslite-warning' };
@@ -144,7 +158,10 @@ export function renderEsliteAccountSheet(autoPurchase, slot, account, runtime, v
   if (!row) return;
   row.hidden = !visible;
   const put = (name, text, tone = '') => { const el = document.getElementById('eslite-sheet-' + name + '-' + slot); el.textContent = text; el.className = tone; return el; };
-  document.getElementById('eslite-sheet-identity-' + slot).innerHTML = '<strong>' + e(slot + ' · ' + (account.account || account.displayAccount || '未設定')) + '</strong><small>' + e(autoPurchase.esliteMemberNames?.[slot] || (account.ready ? '姓名待辨識' : '—')) + '</small>';
+  const accountLink = document.getElementById('eslite-sheet-browser-' + slot);
+  accountLink.textContent = account.account || account.displayAccount || '未設定';
+  accountLink.setAttribute('aria-disabled', String(!account.ready || Boolean(runtime.busy || runtime.state === 'busy')));
+  document.getElementById('eslite-sheet-member-' + slot).textContent = autoPurchase.esliteMemberNames?.[slot] || (account.ready ? '姓名待辨識' : '—');
   const labels = { ready: '已登入', needs_login: '需登入', error: '檢查異常', idle: '待檢查', verifying: '檢查中', logging_in: '登入中' };
   put('login', !account.ready ? '未設定' : account.enabled === false ? '已停用' : labels[runtime.loginState || account.loginState] || '待檢查', runtime.loginState === 'ready' ? 'ok' : '');
   const readiness = esliteAccountReadiness(autoPurchase, account, runtime);
@@ -157,12 +174,39 @@ export function renderEsliteAccountSheet(autoPurchase, slot, account, runtime, v
   purchased.title = !runtime.purchaseHistorySyncedAt ? '尚未同步官方已購紀錄' : runtime.purchaseHistoryComplete ? '官方已購紀錄已同步' : '官方已購紀錄部分同步';
   const heartbeat = put('heartbeat', runtime.heartbeatEnabled ? runtime.heartbeatMode === 'accelerated' ? '90 秒' : '10 分鐘' : '休眠', 'muted');
   heartbeat.title = '上次 ' + esliteSheetTime(runtime.lastVerifiedAt) + ' · 下次 ' + esliteSheetTime(runtime.nextVerifyAt);
+  const tokenCell = document.getElementById('eslite-sheet-token-' + slot);
+  if (tokenCell) {
+    tokenCell.dataset ||= {};
+    tokenCell.dataset.expiresAt = runtime.tokenExpiresAt || '';
+    const token = esliteTokenCountdown(runtime.tokenExpiresAt);
+    tokenCell.innerHTML = '<span>' + e(token.text) + '</span><small>' + e(runtime.tokenExpiresAt ? esliteSheetTime(runtime.tokenExpiresAt) : '未取得到期時間') + '</small>';
+    tokenCell.className = token.tone;
+    tokenCell.title = '依官方 JWT 實際到期時間計算；剩餘時間不代表會員 API 一定有效';
+  }
   const actions = document.getElementById('eslite-sheet-actions-' + slot);
+  if (runtime.accountBrowserOpen) put('api', '帳號瀏覽器使用中 · 暫停派單', 'eslite-warning');
+  else if (runtime.cartActionUncertain) put('api', '手動清車待確認', 'eslite-warning');
   // Existing official-query and release controls retain their handlers and IDs.
   const query = document.getElementById('eslite-query-orders-' + slot);
   if (query) { query.textContent = '查單'; query.title = '官方查單／同步已購'; actions.append(query); }
   const release = document.getElementById('eslite-release-hold-' + slot);
-  if (release) { release.textContent = '解除保護'; release.title = '僅限已核對官方訂單未成立'; actions.append(release); }
+  if (release) { release.textContent = '未成立'; release.title = '人工確認列出的待核對任務未成立；也可在訂單結果欄單筆確認'; actions.append(release); }
+}
+
+export function esliteTokenCountdown(expiresAt, now = Date.now()) {
+  const expiry = Date.parse(expiresAt || '');
+  if (!Number.isFinite(expiry)) return { text: '未取得', tone: 'muted' };
+  const seconds = Math.max(0, Math.floor((expiry - now) / 1000));
+  if (!seconds) return { text: '已到期', tone: 'bad' };
+  return { text: [Math.floor(seconds / 3600), Math.floor(seconds / 60) % 60, seconds % 60].map(n => String(n).padStart(2, '0')).join(':'), tone: seconds <= 600 ? 'eslite-warning' : 'ok' };
+}
+
+export function tickEsliteTokenCountdowns() {
+  for (const cell of document.querySelectorAll('[id^="eslite-sheet-token-"]')) {
+    const token = esliteTokenCountdown(cell.dataset.expiresAt);
+    const span = cell.querySelector('span'); if (span) span.textContent = token.text;
+    cell.className = token.tone;
+  }
 }
 
 export function renderEsliteTables(autoPurchase = {}) {
@@ -210,6 +254,8 @@ export function renderEsliteTables(autoPurchase = {}) {
   root.innerHTML = esliteSheetOrderRowsHtml(selected.rows, expanded);
   document.getElementById('eslite-sheet-order-count').textContent = selected.rows.length + '／' + selected.total + ' 筆';
   root.onclick = event => {
+    const confirmation = event.target.closest('button[data-eslite-no-order]');
+    if (confirmation) { void resolveEsliteHold(confirmation.dataset.esliteAccount, confirmation.dataset.esliteNoOrder); return; }
     const exportButton = event.target.closest('button[data-eslite-export]');
     if (exportButton) { exportPurchaseLog('eslite', exportButton.dataset.esliteExport); return; }
     const button = event.target.closest('button[data-eslite-step]');
@@ -222,4 +268,4 @@ export function renderEsliteTables(autoPurchase = {}) {
 }
 
 export const esliteTableClient = [esliteAccountRowHtml, esliteSheetEscape, esliteSheetTime, esliteSheetOutcome, esliteSheetRecords,
-  esliteSheetStepsHtml, esliteSheetOrderRowsHtml, esliteAccountReadiness, renderEsliteAccountSheet, renderEsliteTables].map(fn => fn.toString()).join('\n');
+  esliteSheetStepsHtml, esliteSheetOrderRowsHtml, esliteAccountReadiness, esliteTokenCountdown, tickEsliteTokenCountdowns, renderEsliteAccountSheet, renderEsliteTables].map(fn => fn.toString()).join('\n');

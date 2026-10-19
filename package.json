@@ -7,15 +7,22 @@
   "scripts": {
     "start": "node src/index.js",
     "check": "node scripts/check.mjs",
+    "test": "node --test",
+    "test:offline": "node --test --test-concurrency=1",
+    "audit:distribution": "node scripts/audit-distribution.mjs",
+    "verify:handoff": "node scripts/verify-handoff.mjs",
+    "check:amazon-race": "node --check src/amazon-pre-submit-retry.js && node --check src/amazon-race-coordinator.js && node --check src/amazon-race-bridge.js && node --check extensions/amazon-race/background.js && node --check extensions/amazon-race/dom.js && node --check extensions/amazon-race/popup.js",
+    "test:commerce": "node scripts/commerce-acceptance.mjs",
     "check:edion": "node --check src/edion-browser-bridge.js && node --check extensions/edion-monitor/background.js && node --check extensions/edion-monitor/collector.js && node --check extensions/edion-monitor/runner.js && node --check extensions/edion-monitor/popup.js"
   },
   "dependencies": {
     "cheerio": "^1.1.2",
     "dotenv": "^17.2.3",
     "iconv-lite": "^0.6.3",
-    "playwright": "^1.55.0"
+    "playwright": "^1.55.0",
+    "ws": "^8.22.0"
   },
   "engines": {
-    "node": ">=20.18.1"
+    "node": ">=20"
   }
 }

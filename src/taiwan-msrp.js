@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 
-const CATALOG_URL = new URL('../data/reference/taiwan-msrp-catalog.json', import.meta.url);
+const LOCAL_CATALOG_URL = new URL('../data/reference/taiwan-msrp-catalog.json', import.meta.url);
+const CATALOG_URL = fs.existsSync(LOCAL_CATALOG_URL) ? LOCAL_CATALOG_URL
+  : new URL('../assets/reference/taiwan-msrp-catalog.json', import.meta.url);
 const IMPORT_VERSION_WORDS = /(?:美版|韓版|日版|海外版|歐美版|平行輸入|水貨)/i;
 const MODEL_PATTERN = /\b(?:BXG|BXA|BXH|BX|CX|UX)-\d{2}\b/gi;
 
