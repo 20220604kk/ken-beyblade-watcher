@@ -59,7 +59,28 @@ namespace KenMonitorControl {
         public static bool Yes(object source, params string[] keys) { return Object.Equals(Get(source, keys), true); }
         public static object Parse(string text) { return new JavaScriptSerializer { MaxJsonLength = 48 * 1024 * 1024, RecursionLimit = 150 }.DeserializeObject(text); }
         public static bool IsStatus(object source) { return Get(source,"autoPurchase") is IDictionary<string,object> && Get(source,"japanAuctions") is IDictionary<string,object> && Get(source,"systemPause") is IDictionary<string,object>; }
-        public static string Mode(object status, params string[] keys) { return Yes(status,"systemPause","active") ? "已暫停" : Yes(status, keys) ? "已啟用" : "未啟用"; }
+        public static string Mode(object status, params string[] keys) { return Yes(status, keys) ? "已啟用" : Yes(status,"systemPause","active") ? "已暫停" : "未啟用"; }
+        public static bool AnyPurchaseEnabled(object status) {
+            if(Yes(status,"autoPurchase","enabled"))return true;
+            var orders=Get(status,"japanAuctions","amazonJpProductOrders") as IEnumerable;
+            if(orders!=null)foreach(var order in orders)if(Yes(order,"enabled"))return true;
+            return false;
+        }
+        public static bool AnyFeatureEnabled(object status) {
+            return Yes(status,"funbox","enabled") || Yes(status,"funboxSandbox","enabled")
+                || Yes(status,"shoppingSites","enabled") || Yes(status,"japanAuctions","enabled")
+                || Yes(status,"japanAuctions","amazonJp","enabled") || AnyPurchaseEnabled(status);
+        }
+        public static bool PauseMismatch(object status) {return Yes(status,"systemPause","active")&&AnyFeatureEnabled(status);}
+        public static string JapanMode(object status) {
+            return "日網 "+(Yes(status,"japanAuctions","enabled")?"開":"關")+" / 日亞 "+(Yes(status,"japanAuctions","amazonJp","enabled")?"開":"關");
+        }
+        public static string PurchaseMode(object status) {
+            return AnyPurchaseEnabled(status)?"有啟用任務":Yes(status,"systemPause","active")?"已暫停":"全部停用";
+        }
+        public static string StatusWarning(object status) {
+            return PauseMismatch(status)?"全域暫停與個別開關不一致；仍有任務啟用，請查看各項狀態。":"";
+        }
     }
     sealed class Snapshot {
         public object Status; public bool Disabled; public bool AutoStart; public bool Watchdog; public bool Recovery; public string Integrity; public string Error;
@@ -67,7 +88,9 @@ namespace KenMonitorControl {
         public string ToggleText {get{return CanStop?"關閉":"啟動";}}
         public string Title {
             get {
-                if (Status != null) return Data.Yes(Status,"systemPause","active") ? "服務在線 · 功能已暫停" : "監控服務運作中";
+                if (Status != null) return Data.PauseMismatch(Status) ? "服務在線 · 部分功能啟用"
+                    : Data.Yes(Status,"systemPause","active") ? "服務在線 · 功能已暫停"
+                    : Data.AnyFeatureEnabled(Status) ? "監控服務運作中" : "服務在線 · 功能未啟用";
                 if (Integrity != null) return "啟動異常 · 狀態資料待處理";
                 if (Disabled) return "監控已關閉";
                 return Watchdog ? "服務未就緒 · 正在嘗試啟動" : "監控服務未啟動";
@@ -180,17 +203,15 @@ namespace KenMonitorControl {
                     }
                     return snap;
                 });
-                if(IsDisposed)return;latest=value;title.Text=value.Title;title.ForeColor=value.Status!=null?green:value.Integrity!=null?Color.FromArgb(255,150,130):Color.FromArgb(255,200,105);
+                if(IsDisposed)return;latest=value;title.Text=value.Title;title.ForeColor=Data.PauseMismatch(value.Status)?Color.FromArgb(255,200,105):value.Status!=null?green:value.Integrity!=null?Color.FromArgb(255,150,130):Color.FromArgb(255,200,105);
                 toggleButton.Text=value.ToggleText;toggleButton.BackColor=value.CanStop?Color.FromArgb(130,60,73):Color.FromArgb(31,135,113);toggleButton.Enabled=!acting;
                 description.Text=value.Status!=null?"本機控制台已回應 · 下方顯示的是平台設定，不代表商品有庫存。":value.Integrity??(value.Disabled?"手動停止狀態已保存；按「開啟監控」才會解除。":value.Error);
                 platformValues[0].Text=value.Status==null?"—":Data.Mode(value.Status,"funbox","enabled");
                 platformValues[1].Text=value.Status==null?"—":Data.Mode(value.Status,"shoppingSites","enabled");
-                platformValues[2].Text=value.Status==null?"—":Data.Yes(value.Status,"systemPause","active")?"已暫停": "日網 "+(Data.Yes(value.Status,"japanAuctions","enabled")?"開":"關")+" / 日亞 "+(Data.Yes(value.Status,"japanAuctions","amazonJp","enabled")?"開":"關");
-                bool auto=Data.Yes(value.Status,"autoPurchase","enabled");
-                var orders=Data.Get(value.Status,"japanAuctions","amazonJpProductOrders") as IEnumerable;
-                if(orders!=null)foreach(var line in orders)if(Data.Yes(line,"enabled"))auto=true;
-                platformValues[3].Text=value.Status==null?"—":Data.Yes(value.Status,"systemPause","active")?"已暫停":auto?"有啟用任務":"全部停用";
+                platformValues[2].Text=value.Status==null?"—":Data.JapanMode(value.Status);
+                platformValues[3].Text=value.Status==null?"—":Data.PurchaseMode(value.Status);
                 warning.Text=value.Recovery?"歷史待核對：完成核對前，請勿啟用自動下單。":value.Disabled?"目前已記住關閉；即使勾選開機啟動，也不會自行復活。":"開啟服務不等於所有平台已啟用；詳細任務請看儀表板。";
+                if(Data.PauseMismatch(value.Status))warning.Text=(value.Recovery||value.Disabled?warning.Text+" ":"")+Data.StatusWarning(value.Status);
                 applying=true;autoStart.Checked=value.AutoStart;applying=false;
                 updated.Text="最後核對 "+DateTime.Now.ToString("HH:mm:ss")+" · 每 4 秒更新 · 關閉視窗 ≠ 關閉監控";
                 orderView.SetOnline(value.Status!=null);
@@ -220,6 +241,17 @@ namespace KenMonitorControl {
             if(!Data.IsStatus(healthy)||Data.Mode(healthy,"funbox","enabled")!="已啟用")throw new Exception("Healthy status mapping");
             var paused=Data.Parse("{\"autoPurchase\":{},\"japanAuctions\":{},\"systemPause\":{\"active\":true}}");
             if(new Snapshot{Status=paused}.Title!="服務在線 · 功能已暫停")throw new Exception("Paused mapping");
+            var mixed=Data.Parse("{\"autoPurchase\":{\"enabled\":false},\"japanAuctions\":{\"enabled\":true,\"amazonJp\":{\"enabled\":true},\"amazonJpProductOrders\":[{\"slot\":\"A\",\"enabled\":true}]},\"systemPause\":{\"active\":true},\"funbox\":{\"enabled\":true}}");
+            if(new Snapshot{Status=mixed}.Title!="服務在線 · 部分功能啟用"||!Data.PauseMismatch(mixed))throw new Exception("Mixed pause must not hide enabled tasks");
+            if(Data.Mode(mixed,"funbox","enabled")!="已啟用"||Data.JapanMode(mixed)!="日網 開 / 日亞 開"||Data.PurchaseMode(mixed)!="有啟用任務")throw new Exception("Platform settings overridden by global pause");
+            if(Data.StatusWarning(mixed).IndexOf("不一致")<0||Data.StatusWarning(paused)!="")throw new Exception("Pause mismatch warning");
+            if(Data.Mode(paused,"funbox","enabled")!="已暫停"||Data.JapanMode(paused)!="日網 關 / 日亞 關"||Data.PurchaseMode(paused)!="已暫停"||Data.PauseMismatch(paused))throw new Exception("Fully paused mapping");
+            var amazonOnly=Data.Parse("{\"autoPurchase\":{},\"japanAuctions\":{\"amazonJp\":{\"enabled\":true}},\"systemPause\":{\"active\":true}}");
+            if(!Data.PauseMismatch(amazonOnly)||Data.JapanMode(amazonOnly)!="日網 關 / 日亞 開"||Data.PurchaseMode(amazonOnly)!="已暫停")throw new Exception("Independent Amazon monitoring mapping");
+            var singleOnly=Data.Parse("{\"autoPurchase\":{\"enabled\":false},\"japanAuctions\":{\"amazonJpProductOrders\":[{\"enabled\":true}]},\"systemPause\":{\"active\":true}}");
+            if(!Data.PauseMismatch(singleOnly)||new Snapshot{Status=singleOnly}.Title!="服務在線 · 部分功能啟用"||Data.PurchaseMode(singleOnly)!="有啟用任務")throw new Exception("Single task hidden by paused parent");
+            var off=Data.Parse("{\"autoPurchase\":{\"enabled\":false},\"japanAuctions\":{\"amazonJpProductOrders\":[{\"enabled\":false}]},\"systemPause\":{\"active\":false}}");
+            if(new Snapshot{Status=off}.Title!="服務在線 · 功能未啟用"||Data.PurchaseMode(off)!="全部停用")throw new Exception("Online but disabled mapping");
             if(new Snapshot{Disabled=true}.Title!="監控已關閉")throw new Exception("Stop mapping");
             if(new Snapshot{Disabled=true,Integrity="invalid"}.Title!="啟動異常 · 狀態資料待處理")throw new Exception("Corruption hidden");
             if(new Snapshot{Watchdog=true}.Title.IndexOf("未就緒")<0)throw new Exception("Watchdog incorrectly healthy");
