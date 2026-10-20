@@ -106,8 +106,18 @@ test('特別任務：明確售罄不加車、不送單',async()=>{
 test('特別任務：啟用必須確認，停用只釋放安全帳號',async()=>{
  await harness(async({task})=>{task.data.enabled=false;await assert.rejects(()=>task.arm({}));await task.arm({confirmRealOrders:true});assert.equal(task.isReserved('C'),true);await task.stop();assert.equal(task.isReserved('C'),false);task.data.jobs[0].status='unknown';await task.stop();assert.equal(task.isReserved('C'),true);});
 });
-test('特別任務：前端嵌入現有C列，不新增控制台且序號以密碼欄填寫',()=>{
- assert.doesNotThrow(()=>new Function(clientScript));assert.match(clientScript,/funbox-sheet-actions-C/);assert.match(clientScript,/funbox-special-reserved/);assert.match(clientScript,/confirmRealOrders: true/);assert.match(clientScript,/\.type = 'password'/);assert.doesNotMatch(clientScript,/window\.open|localhost:32[2-9]/);
+test('特別任務：前端嵌入現有C列，序號明碼且使用視窗內確認',()=>{
+ assert.doesNotThrow(()=>new Function(clientScript));assert.match(clientScript,/funbox-sheet-actions-C/);assert.match(clientScript,/funbox-special-reserved/);assert.match(clientScript,/confirmRealOrders:true/);assert.match(clientScript,/\.type = 'text'/);assert.doesNotMatch(clientScript,/window\.open|localhost:32[2-9]|\bconfirm\(/);
+});
+test('特別任務：只有受同源CSRF保護的編輯入口回填序號，普通狀態與本機狀態不含序號',async()=>{
+ await harness(async({task})=>{
+  const invoke=async(action,headers={})=>{let body='',status;const req={url:'/optional-tasks/funbox-app-redemption/'+action,method:'POST',headers:{host:'127.0.0.1:3210',origin:'http://127.0.0.1:3210','x-task-csrf':task.csrf,...headers},async *[Symbol.asyncIterator](){yield '{}';}};await task.handle(req,{writeHead:s=>{status=s;},end:text=>{body=text;}});return{status,body:JSON.parse(body)};};
+  assert.equal(JSON.stringify(task.status()).includes(rows[0].code),false);
+  const edit=await invoke('edit');assert.equal(edit.status,200);assert.deepEqual(edit.body.jobs.map(j=>j.code),rows.map(r=>r.code));
+  assert.equal((await invoke('edit',{origin:'https://other.invalid'})).status,403);
+  assert.equal((await invoke('edit',{'x-task-csrf':'wrong'})).status,403);
+  assert.equal((await fs.readFile(path.join(task.directory,'state.json'),'utf8')).includes(rows[0].code),false);
+ });
 });
 test('特別任務：開放時間之前及三十分鐘後都不加車、不送單',async()=>{
  await harness(async({task,clock,counts})=>{clock.now=Date.parse(start)-1;await task.run();assert.equal(counts().addCount,0);clock.now=Date.parse(start)+31*60000;await task.run();assert.equal(counts().postCount,0);assert.equal(task.data.enabled,false);});

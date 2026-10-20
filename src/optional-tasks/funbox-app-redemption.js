@@ -129,6 +129,10 @@ export class FunboxAppRedemption {
       jobs: this.data.jobs.map(({ id, productId, status, orderNumber, error, amount, steps = [] }) => ({ id, productId, productName: PRODUCTS.find(p => p.id === productId)?.name,
         status, orderNumber, error, amount, codeSaved: this.codes.some(c => c.id === id), steps })), events: this.data.events.slice(-80), csrf: this.csrf };
   }
+  editableStatus() {
+    const status = this.status();
+    return { ...status, jobs: status.jobs.map(job => ({ ...job, code: this.codes.find(c => c.id === job.id)?.code || '' })) };
+  }
   save() {
     const text = JSON.stringify(this.data, null, 2);
     this.saveTail = this.saveTail.catch(() => {}).then(async () => {
@@ -449,7 +453,7 @@ export class FunboxAppRedemption {
       const body = JSON.parse(text || '{}');
       if (this.disabled) throw fail('input', '特別任務入口已移除');
       const action = pathname.slice(PREFIX.length + 1);
-      const result = action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
+      const result = action === 'edit' ? this.editableStatus() : action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
       if (!result) throw fail('input', '不存在的特別任務操作'); json(res, 200, result);
     } catch (e) { json(res, 400, { error: ['input','busy','hold','completed','confirmation','account','price','cart','pickup','login','storage'].includes(e.code) ? e.message : '特別任務操作未完成；請查看本機狀態', code: e.code || 'failed' }); }
     return true;
