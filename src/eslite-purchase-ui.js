@@ -116,7 +116,7 @@ export function esliteSheetOrderRowsHtml(records, expanded = new Set()) {
     const paymentNote = item.paymentStatus === 'payment_paid' ? '已付款' : item.paymentDeadline ? '期限 ' + esliteSheetTime(item.paymentDeadline) : item.payment === 'virtual_atm_home' && orderId !== '—' ? paymentHref ? '轉帳資料見付款頁' : '轉帳資訊未記錄' : '';
     const open = expanded.has(key);
     const quantity = item.quantity ?? item.product?.quantity;
-    const product = item.mode === 'batch' && item.products?.length ? item.products.map(p => `${p.title || p.id} ×${p.quantity}`).join(' ＋ ') : item.product?.title || '未命名商品';
+    const product = (item.specialTask ? '【特別任務】' : '') + (item.mode === 'batch' && item.products?.length ? item.products.map(p => `${p.title || p.id} ×${p.quantity}`).join(' ＋ ') : item.product?.title || '未命名商品');
     const confirmation = item.platform === 'eslite' && item.status === 'submitted_unconfirmed' && item.taskId
       ? '<small><button type="button" data-eslite-no-order="' + e(item.taskId) + '" data-eslite-account="' + e(item.accountSlot) + '" title="只確認這筆任務未成立，不清車、不重送">確認未成立</button></small>' : '';
     return '<tr><td class="eslite-nowrap">' + e(esliteSheetTime(item.completedAt || item.startedAt)) + '</td><td class="eslite-num">' + e(item.accountSlot || '—')

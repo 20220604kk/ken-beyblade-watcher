@@ -1535,6 +1535,7 @@ async function readJson(request) {
 }
 
 export function createDashboard({
+  optionalTask = null,
   onProbeEslitePayments = async () => { throw new Error('付款契約探測尚未設定'); },
   onCheckPurchaseReadiness = async () => { throw new Error('補貨前檢查尚未設定'); },
   productCatalog = new ProductSheetCatalog(),
@@ -1574,6 +1575,7 @@ export function createDashboard({
       }
       if (isArchivedFacebookRequest(request.url)) return json(response, 410, { error: 'Facebook 已封存：1010FB暫存', code: 'facebook_archived' });
       if (readOnly && request.method !== 'GET') return json(response, 403, { error: '預覽模式不會更改監控或推送通知' });
+      if (optionalTask && await optionalTask.handle(request, response)) return;
       if (request.method === 'GET' && (request.url === '/api/product-catalog' || request.url === '/api/product-catalog?refresh=1')) {
         const catalog = await productCatalog.read({ force: request.url.endsWith('?refresh=1') });
         const settings = getStatus().autoPurchase || {};
@@ -1595,7 +1597,7 @@ export function createDashboard({
       if (amazonRace && await amazonRace.handle(request, response)) return;
       if (request.method === 'GET' && request.url === '/') {
         response.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
-        response.end(pageHtml);
+        response.end(optionalTask ? pageHtml.replace('</body>', '<script src="/optional-tasks/funbox-app-redemption/client.js"></script></body>') : pageHtml);
         return;
       }
       if (request.url.startsWith('/funbox-sandbox') && await funboxSandbox.handle(request, response)) return;

@@ -949,6 +949,7 @@ if (config.autoPurchase.pickupPolicyVersion < 1) {
   config.autoPurchase.pickupPolicyVersion = 1;
   await saveConfig();
 }
+let funboxSpecialTask = null;
 const autoPurchase = new AutoPurchaseCoordinator({
   continuousEsliteTasks: true,
   continuousFunboxTasks: true,
@@ -967,7 +968,9 @@ const autoPurchase = new AutoPurchaseCoordinator({
           && (item.accountSlot || item.slot) === slot && (!item.accountIdentity || item.accountIdentity === identity) && item.status === 'submitted_unconfirmed');
         return record ? { productId: record.product?.id, products: record.products, startedAt: record.startedAt } : null;
       },
-      getAccounts: () => purchaseCredentials.getFunboxAccounts(),
+      getAccounts: () => purchaseCredentials.getFunboxAccounts().map(account => account.slot === 'C'
+        && (funboxSpecialTask?.isReserved('C') || state.data.commerce?.autoPurchase?.externalAccountReservations?.C)
+        ? { ...account, enabled: false } : account),
       getPickupSetup: (slot) => purchaseCredentials.getPickupSetup('funbox', slot),
       onPickupOrderConfirmed: async(slot,api,result,expectedAccount)=>{
         const setup=await verifyFunboxPickupOrder(api,result.resultUrl,purchaseCredentials.getPickupProfile());
@@ -1012,6 +1015,17 @@ const autoPurchase = new AutoPurchaseCoordinator({
   }),
   log: (message) => log(message, 'shopping')
 });
+const optionalFunboxTaskUrl = new URL('./optional-tasks/funbox-app-redemption.js', import.meta.url);
+if (fsSync.existsSync(optionalFunboxTaskUrl) && !fsSync.existsSync(path.join(dataDir, 'optional-tasks', 'funbox-app-redemption', 'disabled.flag'))) {
+  try {
+    const { FunboxAppRedemption } = await import(optionalFunboxTaskUrl.href);
+    funboxSpecialTask = await new FunboxAppRedemption({ dataDir, state, credentials: purchaseCredentials,
+      multi: autoPurchase.adapters.funbox, coordinator: autoPurchase, applyRuntimeConfig: () => autoPurchase.applyRuntimeConfig(),
+      log: message => log(message, 'funbox') }).init();
+  } catch {
+    log('方爸APP兌換載入失敗；一般監控維持，既有 C 交易保護保留。請檢查特別任務本機資料。', 'funbox');
+  }
+}
 const amazonOrderHistory = new AmazonOrderHistory(dataDir, { log: (message) => log(message, 'japan') });
 const amazonRaceCoordinator = new AmazonRaceCoordinator({ state, getConfig: slot => config.amazonJpProductOrders[slot] });
 const amazonJpProductOrders = ['A', 'B', 'C'].map((slot) => new AmazonJpProductOrderMonitor({
@@ -2746,6 +2760,7 @@ const purchaseReadiness = new PurchaseReadinessCheck({
 });
 const esliteBrowser = new EsliteSessionBridge({ state, importSession: body => autoPurchase.adapters.eslite.importBrowserSession(body) });
 const dashboard = createDashboard({
+  optionalTask: funboxSpecialTask,
   amazonRace,
   esliteBrowser,
   onCheckPurchaseReadiness: (body = {}) => purchaseReadiness.check(String(body.platform || '')),
@@ -3176,7 +3191,12 @@ const dashboard = createDashboard({
     log(result.message, platform === 'funbox' ? 'funbox' : 'shopping');
     return result;
   },
-  onPurchaseAccountAction: (body) => autoPurchase.accountAction(body),
+  onPurchaseAccountAction: (body) => {
+    if (body.platform === 'funbox' && String(body.accountSlot || '').toUpperCase() === 'C' && funboxSpecialTask?.isReserved('C')) {
+      throw new Error('C 正由特別任務保留；請先停用並核對交易，再開啟帳號工具。');
+    }
+    return autoPurchase.accountAction(body);
+  },
   onCompleteAutoPurchaseLogin: async (body) => {
     const platform = String(body.platform || '');
     const result = await autoPurchase.completeLogin(platform, { accountSlot: body.accountSlot });
@@ -4250,6 +4270,7 @@ function shutdown(reason = 'shutdown', exitCode = 0) {
       japanAuctionMonitor.close(),
       amazonJapanMonitor.close(),
       ...amazonJpProductOrders.map((monitor) => monitor.close()),
+      funboxSpecialTask?.close(),
       autoPurchase.close()
     ]);
     for (const result of results) {
