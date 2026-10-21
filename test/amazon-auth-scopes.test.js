@@ -150,3 +150,15 @@ test('restart rechecks legacy checkout redirect and auxiliary auth once; unknown
   await m.start();assert.equal(m.storage().status,'needs_review');assert.equal(m.canSchedule(),false);
   assert.equal(f.calls.length,0);
 });
+
+test('ordinary fast polling does not wait for debounced telemetry save; purchase checkpoints remain durable', async t => {
+  const f=fixture(t),m=f.monitor;
+  m.directIdleOrderBaseline={asin,at:new Date().toISOString(),ids:[]};
+  let release;const pending=new Promise(resolve=>{release=resolve;});
+  let writes=0;f.state.save=()=>{writes++;return pending;};
+  t.after(()=>release());
+  await m.scanOnce({purchase:true,trigger:'poll'});
+  assert.equal(writes,1);assert.equal(m.running,false);assert.equal(m.storage().status,'waiting_poll');
+  assert.equal(f.calls.some(c=>c.method==='POST'),false);
+  release();
+});

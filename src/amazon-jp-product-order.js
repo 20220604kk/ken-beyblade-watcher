@@ -225,7 +225,7 @@ export class AmazonJpProductOrderMonitor {
     if (this.pendingSignal) this.scheduleNext(cooldown);
     else if (this.mode() === 'hybrid') {
       // Start-to-start target; slow requests never overlap or create catch-up bursts.
-      const delay = Math.max(250, this.pollIntervalMs() - (Date.now() - this.taskClock));
+      const delay = Math.max(this.fastLaneEnabled() ? 0 : 250, this.pollIntervalMs() - (Date.now() - this.taskClock));
       this.scheduleNext(Math.max(delay, cooldown));
     }
   }
@@ -861,7 +861,11 @@ export class AmazonJpProductOrderMonitor {
           };
           await this.sendPrivateAndRecord(`❌ 日亞商品頁補貨訊號觸發後未能購買｜${snapshot.title || targetAsin}｜原因：${reasons[evaluation.reason] || evaluation.reason}｜${this.mode() === 'hybrid' ? '依雙線模式繼續檢查' : '等待下一次補貨訊號'}`, 'failure');
         }
-        await this.state.save();
+        // An unavailable quote is telemetry, not purchase intent. Queue its
+        // ordinary debounced save without adding 350ms to every fast poll.
+        // Durable transaction checkpoints still await writeSnapshot below.
+        if (this.fastLaneEnabled()) void this.state.save().catch(error => this.log(`日亞監控狀態儲存失敗：${safePurchaseText(error)}`));
+        else await this.state.save();
         if (this.fastLaneEnabled() && apiClient && !storage.checkoutStockWait && !this.pendingSignal
           && evaluation.reason !== 'purchase_limited'
           && (!this.directIdleOrderBaseline || this.directIdleOrderBaseline.asin !== targetAsin

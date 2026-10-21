@@ -19,6 +19,7 @@ test('A one-second schedule never overlaps an active check, preserves cooldown a
   monitor.scheduleNext = delay => scheduled.push(delay);
   await monitor.start(); assert.equal(scheduled.at(-1), 1000);
   monitor.taskClock = Date.now(); monitor.rearm(); assert.ok(scheduled.at(-1) <= 1000);
+  monitor.taskClock = Date.now() - 2000; monitor.rearm(); assert.equal(scheduled.at(-1), 0, 'slow response has no extra scheduler idle');
   monitor.running = true; const before = scheduled.length; monitor.rearm(); assert.equal(scheduled.length, before);
   monitor.running = false; monitor.setBackoff(180000); monitor.rearm(); assert.ok(scheduled.at(-1) >= 179900);
   monitor.storage().apiTransaction = { phase: 'submitted' }; const count = scheduled.length;
