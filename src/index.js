@@ -975,8 +975,7 @@ const autoPurchase = new AutoPurchaseCoordinator({
           && (item.accountSlot || item.slot) === slot && (!item.accountIdentity || item.accountIdentity === identity) && item.status === 'submitted_unconfirmed');
         return record ? { productId: record.product?.id, products: record.products, startedAt: record.startedAt } : null;
       },
-      getAccounts: () => purchaseCredentials.getFunboxAccounts().map(account => account.slot === 'C'
-        && (funboxSpecialTask?.isReserved('C') || state.data.commerce?.autoPurchase?.externalAccountReservations?.C)
+      getAccounts: () => purchaseCredentials.getFunboxAccounts().map(account => (funboxSpecialTask?.isReserved(account.slot) || state.data.commerce?.autoPurchase?.externalAccountReservations?.[account.slot])
         ? { ...account, enabled: false } : account),
       getPickupSetup: (slot) => purchaseCredentials.getPickupSetup('funbox', slot),
       onPickupOrderConfirmed: async(slot,api,result,expectedAccount)=>{
@@ -3208,8 +3207,8 @@ const dashboard = createDashboard({
     return result;
   },
   onPurchaseAccountAction: (body) => {
-    if (body.platform === 'funbox' && String(body.accountSlot || '').toUpperCase() === 'C' && funboxSpecialTask?.isReserved('C')) {
-      throw new Error('C 正由特別任務保留；請先停用並核對交易，再開啟帳號工具。');
+    if (body.platform === 'funbox' && (funboxSpecialTask?.isReserved(String(body.accountSlot || '').toUpperCase()) || state.data.commerce?.autoPurchase?.externalAccountReservations?.[String(body.accountSlot || '').toUpperCase()])) {
+      throw new Error('此帳號正由特別任務保留；請先結束並核對交易，再開啟帳號工具。');
     }
     return autoPurchase.accountAction(body);
   },

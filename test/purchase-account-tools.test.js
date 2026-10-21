@@ -20,6 +20,14 @@ function coordinator(platform, adapter) {
 const tool = (c, platform, action = 'clear-cart', accountSlot = 'A') => AutoPurchaseCoordinator.prototype.accountAction.call(c, { platform, accountSlot, action });
 const idle = extra => ({ credentialsStatus: () => ({ ready: true }), activePurchaseHold: () => null, ...extra });
 
+test('FUNBOX clear-all skips the personally assigned special account without opening or clearing it',async()=>{
+  let mutations=0;const c=coordinator('funbox',idle({_acquireWarmWorker:async()=>{mutations++;}}));
+  c._storage=()=>({externalAccountReservations:{A:{taskKind:'funbox_app_redemption'}}});
+  await assert.rejects(tool(c,'funbox','open-browser'),/特別任務/);
+  const result=await tool(c,'funbox','clear-all-carts',null);
+  assert.equal(result.skipped,1);assert.equal(mutations,0);
+});
+
 test('dashboard account tools require local same-origin POST and return action feedback', async () => {
   const seen = [];
   const server = createDashboard({ port: 0, log: () => {}, getStatus: () => ({}), onPurchaseAccountAction: async body => {

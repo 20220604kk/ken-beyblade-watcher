@@ -6638,6 +6638,7 @@ export class AutoPurchaseCoordinator {
 
   async accountAction({ platform, accountSlot, action } = {}) {
     if (action === 'clear-all-carts') return this.clearAllAccountCarts(platform);
+    if (platform === 'funbox' && this._storage?.()?.externalAccountReservations?.[accountSlot]) throw new Error('此帳號由特別任務保留，跳過一般帳號工具');
     if (!['funbox', 'eslite'].includes(platform) || !isEsliteAccountSlot(accountSlot)
       || !['clear-cart', 'open-browser'].includes(action)) throw new Error('平台、帳號或操作不正確');
     const multi = this.adapters[platform];

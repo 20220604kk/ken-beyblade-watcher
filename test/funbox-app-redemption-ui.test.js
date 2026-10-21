@@ -8,18 +8,20 @@ async function fixture(work) {
   const browser=await chromium.launch({headless:true});
   try {
     const page=await browser.newPage(); page.setDefaultTimeout(5000);
-    let state={csrf:'synthetic',enabled:false,reserved:false,running:false,startAt:'2026-10-21T02:00:00Z',events:[],jobs:[{id:'one',productId:'bbpr07730',status:'queued',codeSaved:true}]};
+    let state={csrf:'synthetic',accountSlot:'C',assigned:true,enabled:false,reserved:true,running:false,startAt:'2026-10-21T02:00:00Z',events:[],jobs:[{id:'one',productId:'bbpr07730',status:'queued',codeSaved:true}]};
     let codes=['AAAA-BBBB-0001']; const calls=[],errors=[];
     page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/*',async route=>{
       const request=route.request(),url=new URL(request.url());
-      if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div class="funbox-purchase-panel"><table><tr id="funbox-sheet-account-C"><td id="funbox-sheet-api-C"></td><td id="funbox-sheet-actions-C"></td></tr></table></div>'});
+      if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div class="funbox-purchase-panel"><div class="field"><button id="funbox-purchase-readiness-button">補貨前檢查</button></div><table><tr id="funbox-sheet-account-C"><td id="funbox-sheet-api-C"></td><td id="funbox-sheet-actions-C"></td></tr></table></div>'});
       const action=url.pathname.split('/').at(-1); const body=request.method()==='POST'?request.postDataJSON():{}; calls.push({action,body});
       if(action==='save') {
         if(body.rows.some(r=>!/^\w{4}-\w{4}-\w{4}$/.test(r.code)))return route.fulfill({status:400,json:{error:'序號格式應為四碼－四碼－四碼'}});
         codes=body.rows.map(r=>r.code); state={...state,startAt:body.startAt,jobs:body.rows.map((r,i)=>({id:r.id||'row'+i,productId:r.productId,status:'queued',codeSaved:true}))};
       }
       if(action==='arm')state={...state,enabled:true,reserved:true};
+      if(action==='assign'){state={...state,accountSlot:body.accountSlot,assigned:true,reserved:true,finishedAt:null,jobs:[]};codes=[];}
+      if(action==='finish')state={...state,enabled:false,reserved:false,assigned:false,finishedAt:new Date().toISOString()};
       if(action==='edit')return route.fulfill({json:{...state,jobs:state.jobs.map((j,i)=>({...j,code:codes[i]}))}});
       return route.fulfill({json:state});
     });
@@ -75,5 +77,23 @@ test('特別任務介面：開賣後顯示自動重試倒數與實際逾時端�
   const logs=await page.locator('[data-logs]').textContent();assert.match(logs,/GET \/cart 失敗/);assert.match(logs,/5000ms/);assert.match(logs,/官方請求逾時/);assert.match(logs,/下次/);
   assert.match(await page.locator('.funbox-special-job small').textContent(),/官方請求逾時/);
   assert.doesNotMatch(await page.locator('#funbox-sheet-api-C').textContent(),/等待 10:00|待核對/);
+ });
+});
+
+test('個人介面：入口只在工具列，選帳號才指定；按鈕單排且最多兩字，結束恢復一般列',{timeout:20000},async()=>{
+ await fixture(async({page,calls,setState})=>{
+  assert.equal(await page.locator('#funbox-sheet-actions-C [data-funbox-special]').count(),0);
+  assert.equal(await page.locator('#funbox-purchase-readiness-button').locator('..').locator('[data-funbox-special]').count(),1);
+  const buttons=await page.locator('.funbox-special-actions > button').allTextContents();assert.ok(buttons.every(t=>[...t.trim()].length<=2));
+  const tops=await page.locator('.funbox-special-modal:not(.funbox-special-chooser) .funbox-special-actions > button').evaluateAll(nodes=>nodes.map(n=>n.getBoundingClientRect().top));assert.equal(new Set(tops).size,1);
+  assert.equal(await page.locator('[data-remove]').count(),0);
+  await page.getByRole('button',{name:'結束',exact:true}).click();await page.waitForFunction(()=>!document.querySelector('.funbox-special-modal')?.open);
+  assert.equal(calls.filter(c=>c.action==='finish').length,1);assert.equal(await page.locator('#funbox-sheet-account-C').evaluate(n=>n.classList.contains('funbox-special-reserved')),false);
+  setState({accountSlot:'C',accounts:[{slot:'A',ready:true},{slot:'B',ready:true},{slot:'C',ready:true}]});
+  await page.getByRole('button',{name:'特別',exact:true}).click();await page.getByRole('dialog',{name:'指定特別任務帳號'}).waitFor();
+  assert.equal(calls.filter(c=>c.action==='assign').length,0);await page.getByLabel('特別任務帳號',{exact:true}).selectOption('B');
+  await page.getByRole('button',{name:'指定',exact:true}).click();await page.getByRole('dialog',{name:'方爸APP兌換',exact:true}).waitFor();
+  assert.deepEqual(calls.filter(c=>c.action==='assign').map(c=>c.body),[{accountSlot:'B'}]);assert.equal(calls.filter(c=>c.action==='arm').length,0);
+  if(process.env.KEN_PERSONAL_UI_SCREENSHOT)await page.screenshot({path:process.env.KEN_PERSONAL_UI_SCREENSHOT,fullPage:true});
  });
 });

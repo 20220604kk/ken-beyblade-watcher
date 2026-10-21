@@ -129,7 +129,7 @@ test('特別任務：啟用必須確認，停用只釋放安全帳號',async()=>
  await harness(async({task})=>{task.data.enabled=false;await assert.rejects(()=>task.arm({}));await task.arm({confirmRealOrders:true});assert.equal(task.isReserved('C'),true);await task.stop();assert.equal(task.isReserved('C'),false);task.data.jobs[0].status='unknown';await task.stop();assert.equal(task.isReserved('C'),true);});
 });
 test('特別任務：前端嵌入現有C列，序號明碼且使用視窗內確認',()=>{
- assert.doesNotThrow(()=>new Function(clientScript));assert.match(clientScript,/funbox-sheet-actions-C/);assert.match(clientScript,/funbox-special-reserved/);assert.match(clientScript,/confirmRealOrders:true/);assert.match(clientScript,/\.type = 'text'/);assert.doesNotMatch(clientScript,/window\.open|localhost:32[2-9]|\bconfirm\(/);
+ assert.doesNotThrow(()=>new Function(clientScript));assert.match(clientScript,/funbox-purchase-readiness-button/);assert.match(clientScript,/funbox-special-reserved/);assert.match(clientScript,/confirmRealOrders:true/);assert.match(clientScript,/\.type = 'text'/);assert.doesNotMatch(clientScript,/window\.open|localhost:32[2-9]|\bconfirm\(/);
 });
 test('特別任務：只有受同源CSRF保護的編輯入口回填序號，普通狀態與本機狀態不含序號',async()=>{
  await harness(async({task})=>{
@@ -384,4 +384,72 @@ test('帳號隔離：C身分變動時未知任務不查認其他帳號訂單、�
 
 test('通知隔離：上架通知回呼同步拋錯也不阻擋既有兌換流程',async()=>{
  await harness(async({task,counts})=>{task.onProduct=()=>{throw new Error('synthetic notification failure');};await task.execute();assert.equal(counts().postCount,3);});
+});
+
+test('個人任務：結束保留序號與歷史，取消未派單項目，釋放原帳號且不能重啟舊批次',async()=>{
+ await harness(async({task,state,counts})=>{
+  task.data.reserved=true;await task.reservation(true);
+  const encrypted=await fs.readFile(path.join(task.directory,'queue.enc.json'));
+  await task.finish();assert.equal(task.status().reserved,false);assert.equal(task.status().enabled,false);
+  assert.ok(task.data.finishedAt);assert.ok(task.data.jobs.every(j=>j.status==='cancelled'));
+  assert.equal(state.data.commerce.autoPurchase.externalAccountReservations.C,undefined);
+  assert.deepEqual(await fs.readFile(path.join(task.directory,'queue.enc.json')),encrypted);
+  await assert.rejects(()=>task.arm({confirmRealOrders:true}),e=>e.code==='completed');assert.equal(counts().postCount,0);
+ });
+});
+
+test('個人任務：未知訂單或已加車不得由結束按鈕解除保護',async()=>{
+ for(const status of ['unknown','cart_review'])await harness(async({task,state})=>{
+  task.data.reserved=true;task.data.jobs[0].status=status;await task.reservation(true);
+  await assert.rejects(()=>task.finish(),e=>e.code==='hold');assert.equal(task.status().reserved,true);
+  assert.ok(state.data.commerce.autoPurchase.externalAccountReservations.C);
+ });
+});
+
+test('個人任務：指定B只保留B，使用B登入檔與B門市，所有訂單歸B；結束後恢復B',async()=>{
+ await harness(async({task,state,api,counts})=>{
+  await task.finish();const account=task.credentials.getFunboxAccount;
+  task.credentials.getFunboxAccount=slot=>({...account(),slot});
+  task.credentials.getFunboxAccounts=()=>['A','B','C'].map(slot=>task.credentials.getFunboxAccount(slot));
+  task.multi.adapters.B={activePurchaseHold:()=>null};
+  let factoryPath,pickupSlot;task.apiFactory=async options=>{factoryPath=options.storageState;return api;};
+  const setup=task.credentials.getPickupSetup;task.credentials.getPickupSetup=(platform,slot)=>{pickupSlot=slot;return setup();};
+  await task.assign({accountSlot:'B'});assert.equal(task.data.enabled,false);assert.equal(task.status().assigned,true);
+  assert.equal(task.isReserved('B'),true);assert.equal(task.isReserved('C'),false);assert.ok(state.data.commerce.autoPurchase.externalAccountReservations.B);
+  assert.equal(task.data.jobs.length,0);assert.equal(task.codes.length,0);
+  const history=await fs.readdir(path.join(task.directory,'history'));assert.equal(history.length,1);
+  const archived=JSON.parse(await fs.readFile(path.join(task.directory,'history',history[0],'state.json'),'utf8'));assert.equal(archived.jobs.length,3);
+  await task.configure({rows,startAt:start});await task.arm({confirmRealOrders:true});clearTimeout(task.timer);
+  await task.run();assert.match(factoryPath,/funbox-account-b-session\.json$/);assert.equal(pickupSlot,'B');assert.equal(counts().postCount,3);
+  assert.ok(Object.values(state.data.commerce.autoPurchase.records).every(r=>r.accountSlot==='B'));
+  await task.finish();assert.equal(task.isReserved('B'),false);assert.equal(state.data.commerce.autoPurchase.externalAccountReservations.B,undefined);
+ });
+});
+
+test('個人任務：A沿用正式歷史登入檔；不存在、停用或忙碌帳號不能指定',async()=>{
+ await harness(async({task})=>{
+  await task.finish();await assert.rejects(()=>task.assign({accountSlot:'Z'}),e=>e.code==='input');
+  await assert.rejects(()=>task.assign({accountSlot:'B'}),e=>e.code==='account');
+  const account=task.credentials.getFunboxAccount;task.credentials.getFunboxAccount=slot=>({...account(),slot});
+  task.multi.adapters.A={activePurchaseHold:()=>({pending:true})};
+  await assert.rejects(()=>task.assign({accountSlot:'A'}),e=>e.code==='busy');
+  task.multi.adapters.A.activePurchaseHold=()=>null;await task.assign({accountSlot:'A'});
+  assert.match(task.sessionFile(),/funbox-session\.json$/);assert.equal(task.isReserved('A'),true);
+ });
+});
+
+test('個人任務：結束已保存後重啟會清除本任務殘留保留，不清除其他用途保留',async()=>{
+ await harness(async({task,state})=>{
+  await task.finish();state.data.commerce.autoPurchase.externalAccountReservations.C={taskKind:'funbox_app_redemption'};
+  const restarted=await new FunboxAppRedemption({dataDir:task.dataDir,state,credentials:task.credentials,multi:task.multi}).init();
+  try{assert.equal(restarted.isReserved('C'),false);assert.equal(state.data.commerce.autoPurchase.externalAccountReservations.C,undefined);state.data.commerce.autoPurchase.externalAccountReservations.C={taskKind:'another_task'};await restarted.reservation(false);assert.equal(state.data.commerce.autoPurchase.externalAccountReservations.C.taskKind,'another_task');}finally{await restarted.close();}
+ });
+});
+
+test('個人任務：指定時立即使用所選帳號互斥鎖，拒絕重入；完成後僅保留本次權限',async()=>{
+ await harness(async({task})=>{
+  await task.finish();task.multi.adapters.B={activePurchaseHold:()=>null};let seen=false;
+  task.applyRuntimeConfig=async()=>{if(task.assigningSlot){seen=true;assert.equal(task.isReserved('B'),true);assert.ok(task.multi.accountPurchaseTails.has('B'));await assert.rejects(()=>task.assign({accountSlot:'C'}),e=>e.code==='busy');}};
+  await task.assign({accountSlot:'B'});assert.equal(seen,true);assert.equal(task.multi.accountPurchaseTails.has('B'),false);assert.equal(task.isReserved('B'),true);assert.equal(task.isReserved(undefined),false);
+ });
 });

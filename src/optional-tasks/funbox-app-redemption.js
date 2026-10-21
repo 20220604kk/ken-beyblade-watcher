@@ -119,6 +119,8 @@ export class FunboxAppRedemption {
     this.api = null; this.sessionFingerprint = null; this.memberProof = null;
     this.requestTimeouts = new Map();
   }
+  get slot() { return this.data.accountSlot || 'C'; }
+  sessionFile() { return path.join(this.dataDir, 'auto-purchase', this.slot === 'A' ? 'funbox-session.json' : `funbox-account-${this.slot.toLowerCase()}-session.json`); }
   async init() {
     await fs.mkdir(this.directory, { recursive: true });
     try { this.data = JSON.parse(await fs.readFile(path.join(this.directory, 'state.json'), 'utf8')); } catch (e) { if (e.code !== 'ENOENT') throw e; }
@@ -133,20 +135,22 @@ export class FunboxAppRedemption {
       job.status = job.intent ? 'unknown' : 'cart_review';
       this.data.enabled = Boolean(this.data.continuousRetry)&&this.data.enabled;
     }
-    if (this.isReserved('C')) await this.reservation(true);
+    if (this.isReserved(this.slot)) await this.reservation(true);
+    else if (this.data.finishedAt) await this.reservation(false);
     await this.save(); this.schedule(); return this;
   }
   async reservation(active) {
     const storage = this.state.data.commerce.autoPurchase;
     storage.externalAccountReservations ||= {};
-    if (active) storage.externalAccountReservations.C = { taskKind: 'funbox_app_redemption', at: new Date(this.now()).toISOString(), reason: '方爸APP兌換／特別任務' };
-    else delete storage.externalAccountReservations.C;
+    if (active) storage.externalAccountReservations[this.slot] = { taskKind: 'funbox_app_redemption', at: new Date(this.now()).toISOString(), reason: '方爸APP兌換／特別任務' };
+    else if (storage.externalAccountReservations[this.slot]?.taskKind === 'funbox_app_redemption') delete storage.externalAccountReservations[this.slot];
     await this.state.writeSnapshot();
   }
-  isReserved(slot) { return slot === 'C' && (this.data.reserved || this.data.enabled || Boolean(this.running) || this.data.jobs.some(j => ACTIVE.has(j.status))); }
+  isReserved(slot) { return Boolean(this.assigningSlot) && slot === this.assigningSlot || slot === this.slot && (this.data.reserved || this.data.enabled || Boolean(this.running) || this.data.jobs.some(j => ACTIVE.has(j.status))); }
   status() {
-    return { name: '方爸APP兌換', disabled: Boolean(this.disabled), enabled: this.data.enabled, reserved: this.isReserved('C'), running: Boolean(this.running), startAt: this.data.startAt,
-      nextRetryAt: this.data.nextRetryAt, continuousRetry: Boolean(this.data.continuousRetry), accountSlot: 'C', exactTotal: 555, payment: 'seven_cod', protocolVerified: this.data.jobs.some(j => j.status === 'ordered'),
+    return { name: '方爸APP兌換', disabled: Boolean(this.disabled), enabled: this.data.enabled, reserved: this.isReserved(this.slot), running: Boolean(this.running), startAt: this.data.startAt,
+      nextRetryAt: this.data.nextRetryAt, continuousRetry: Boolean(this.data.continuousRetry), accountSlot: this.slot, exactTotal: 555, payment: 'seven_cod', protocolVerified: this.data.jobs.some(j => j.status === 'ordered'),
+      assigned: Boolean(this.data.assigned), finishedAt: this.data.finishedAt, accounts: (this.credentials.getFunboxAccounts?.() || [this.credentials.getFunboxAccount(this.slot)]).map(a => ({ slot: a.slot || this.slot, ready: Boolean(a.account && a.password && a.enabled !== false) })),
       lastError: this.data.lastError,
       jobs: this.data.jobs.map(({ id, productId, status, orderNumber, error, errorDetail, retryCount, amount, steps = [] }) => ({ id, productId, productName: PRODUCTS.find(p => p.id === productId)?.name,
         status, orderNumber, error, errorDetail, retryCount, amount, codeSaved: this.codes.some(c => c.id === id), steps })), events: this.data.events.slice(-80), csrf: this.csrf };
@@ -166,13 +170,14 @@ export class FunboxAppRedemption {
     const item = { at: new Date(this.now()).toISOString(), label, specialTask: true, ...(job ? { jobId: job.id, productName: PRODUCTS.find(p => p.id === job.productId)?.name } : {}), ...extra };
     this.data.events.push(item); this.data.events = this.data.events.slice(-500);
     if (job) { job.steps ||= []; job.steps.push(item); job.steps = job.steps.slice(-200); }
-    this.log('【特別任務・C】' + (item.productName ? item.productName + '｜' : '') + label
+    this.log('【特別任務・' + this.slot + '】' + (item.productName ? item.productName + '｜' : '') + label
       + (item.httpStatus ? ' · HTTP ' + item.httpStatus : '') + (Number.isFinite(item.durationMs) ? ' · ' + item.durationMs + 'ms' : '')
       + (item.reason ? ' · ' + item.reason : '') + (item.retryAt ? ' · retryAt=' + item.retryAt : ''));
     await this.save(); return item;
   }
   async configure(body) {
-    if (this.isReserved('C')) throw fail('busy', '先停止特別任務並核對未決交易，才能修改序號與排序');
+    if (this.assigning) throw fail('busy', '正在指定帳號');
+    if (this.data.enabled || this.running || this.data.jobs.some(j => ACTIVE.has(j.status)) || (this.isReserved(this.slot) && !this.data.assigned)) throw fail('busy', '先停止特別任務並核對未決交易，才能修改序號與排序');
     if (this.data.jobs.some(j => j.status === 'ordered')) throw fail('completed', '本次已有正式訂單，保留紀錄；請勿重建同一批序號');
     const rows = validateRows(body.rows, this.codes);
     const startAt = new Date(body.startAt || START);
@@ -188,20 +193,78 @@ export class FunboxAppRedemption {
     await this.event('已儲存產品、加密序號與順序'); return this.status();
   }
   async arm(body) {
+    if (this.assigning) throw fail('busy', '正在指定帳號');
     if (this.disabled) throw fail('input', '此外掛已移除入口，請重新安裝後使用');
-    if (body.confirmRealOrders !== true) throw fail('confirmation', '請確認啟用特別任務：帳號 C，單品 7-11 取貨付款，每單 555 元');
+    if (body.confirmRealOrders !== true) throw fail('confirmation', '請確認啟用特別任務：指定帳號，單品 7-11 取貨付款，每單 555 元');
+    if (this.data.finishedAt) throw fail('completed', '本次任務已結束，請重新指定帳號建立新任務');
     if (!this.codes.length || !this.data.jobs.length) throw fail('input', '請先填寫並儲存序號');
     if (this.data.jobs.some(j => ACTIVE.has(j.status))) throw fail('hold', '有未決購物車／訂單，先唯讀查單');
     if (!this.data.jobs.some(j => j.status === 'queued') || this.data.jobs.some(j => !['queued','ordered','skipped'].includes(j.status))) throw fail('completed', '本批沒有可安全接續的待執行項目');
-    const account = this.credentials.getFunboxAccount('C');
-    if (!account.account || !account.password || account.enabled === false) throw fail('account', '帳號 C 尚未設定或啟用');
-    const adapter = this.multi.adapters.C;
-    if (!adapter || adapter.activePurchaseHold() || adapter.accountBrowser || adapter.cartActionUncertain || this.multi.accountPurchaseTails.has('C')) throw fail('busy', '帳號 C 正忙碌或有待核對訂單，未啟用');
-    this.data.accountIdentity = this.multi.accountIdentity('C');
+    const account = this.credentials.getFunboxAccount(this.slot);
+    if (!account.account || !account.password || account.enabled === false) throw fail('account', '指定帳號 尚未設定或啟用');
+    const adapter = this.multi.adapters[this.slot];
+    if (!adapter || adapter.activePurchaseHold() || adapter.accountBrowser || adapter.cartActionUncertain || this.multi.accountPurchaseTails.has(this.slot)) throw fail('busy', '指定帳號 正忙碌或有待核對訂單，未啟用');
+    this.data.accountIdentity = this.multi.accountIdentity(this.slot);
     this.data.enabled = true; this.data.reserved = true; this.stopping = false;
     await this.reservation(true);
-    await this.event('啟用特別任務：C 專用，A／B 維持一般流程');
+    await this.event('啟用特別任務：指定帳號專用，其餘帳號維持一般流程');
     await this.applyRuntimeConfig(); this.schedule(); return this.status();
+  }
+  async assign(body) {
+    if (this.assigning) throw fail('busy', '正在指定帳號');
+    this.assigning = true;
+    try { return await this.assignAccount(body); }
+    finally {
+      this.assignRelease?.();
+      if (this.multi.accountPurchaseTails.get(this.assigningSlot) === this.assignLock) this.multi.accountPurchaseTails.delete(this.assigningSlot);
+      this.assignLock = null; this.assignRelease = null; this.assigning = false; this.assigningSlot = null;
+      await this.applyRuntimeConfig();
+    }
+  }
+  async assignAccount(body) {
+    const slot = String(body.accountSlot || '').toUpperCase();
+    if (!/^[A-N]$/.test(slot)) throw fail('input', '請選擇已設定的帳號');
+    if (this.isReserved(this.slot)) throw fail('busy', '請先結束目前的特別任務');
+    this.multi._syncAccounts?.();
+    const account = this.credentials.getFunboxAccount(slot), adapter = this.multi.adapters[slot];
+    if (!account.account || !account.password || account.enabled === false || !adapter) throw fail('account', '此帳號尚未設定或啟用');
+    if (adapter.activePurchaseHold() || adapter.accountBrowser || adapter.cartActionUncertain || this.multi.accountPurchaseTails.has(slot)
+      || this.state.data.commerce.autoPurchase.externalAccountReservations?.[slot]) throw fail('busy', '此帳號正在使用或有未決交易');
+    this.assigningSlot = slot;
+    this.assignLock = new Promise(resolve => { this.assignRelease = resolve; });
+    this.multi.accountPurchaseTails.set(slot, this.assignLock);
+    await this.applyRuntimeConfig();
+    if (this.data.jobs.length) {
+      const archive = path.join(this.directory, 'history', this.now() + '-' + crypto.randomUUID());
+      await fs.mkdir(archive, { recursive: true });
+      await fs.writeFile(path.join(archive, 'state.json'), JSON.stringify(this.data, null, 2), { mode: 0o600 });
+      await fs.copyFile(path.join(this.directory, 'queue.enc.json'), path.join(archive, 'queue.enc.json'));
+    }
+    const iv = crypto.randomBytes(12), cipher = crypto.createCipheriv('aes-256-gcm', this.key, iv);
+    const encrypted = Buffer.concat([cipher.update('[]'), cipher.final()]);
+    const file = path.join(this.directory, 'queue.enc.json');
+    await fs.writeFile(file + '.tmp', JSON.stringify({ iv: iv.toString('base64'), tag: cipher.getAuthTag().toString('base64'), data: encrypted.toString('base64') }), { mode: 0o600 });
+    await fs.rename(file + '.tmp', file);
+    if (this.api) await this.api.dispose(); this.api = null; this.memberProof = null; this.requestTimeouts.clear();
+    this.codes = []; this.stopping = false;
+    this.data = { version: 1, accountSlot: slot, accountIdentity: this.multi.accountIdentity(slot), assigned: true, reserved: true,
+      enabled: false, continuousRetry: true, startAt: START, jobs: [], events: [] };
+    await this.save(); await this.reservation(true); await this.applyRuntimeConfig();
+    await this.event('已指定帳號 ' + slot + '；僅授予本次任務權限，尚未啟用下單');
+    return this.status();
+  }
+  async finish() {
+    if (this.assigning) throw fail('busy', '正在指定帳號');
+    await this.stop();
+    if (this.running) await this.running;
+    if (this.data.jobs.some(j => ACTIVE.has(j.status) || j.intent && j.status !== 'ordered')) throw fail('hold', '尚有購物車或未決訂單，保留帳號保護；請先查單核對');
+    for (const job of this.data.jobs) if (job.status === 'queued') job.status = 'cancelled';
+    this.data.enabled = false; this.data.reserved = false; this.data.assigned = false;
+    this.data.finishedAt = new Date(this.now()).toISOString(); delete this.data.nextRetryAt;
+    await this.event('特別任務已結束，帳號 ' + this.slot + ' 恢復原一般任務資格');
+    await this.reservation(false); await this.applyRuntimeConfig();
+    if (this.api) await this.api.dispose(); this.api = null; this.memberProof = null;
+    return this.status();
   }
   async reschedule(body) {
     if(this.running || this.data.jobs.some(j=>ACTIVE.has(j.status)) || this.data.jobs.some(j=>j.status==='ordered'))throw fail('busy','目前有執行或已送單紀錄，不能變更時間');
@@ -225,7 +288,7 @@ export class FunboxAppRedemption {
   async warm() {
     try { await this.preflight({ allowLogin: true }); }
     catch (error) {
-      await this.event('C 預熱未完成，開賣前自動重試', undefined, redemptionFailure(error)).catch(() => {});
+      await this.event('指定帳號預熱未完成，開賣前自動重試', undefined, redemptionFailure(error)).catch(() => {});
       if (this.data.enabled && !this.stopping && Date.parse(this.data.startAt) - this.now() > 14000) {
         this.warmTimer = setTimeout(() => { void this.warm(); }, 2000); this.warmTimer.unref?.();
       }
@@ -255,14 +318,14 @@ export class FunboxAppRedemption {
     await this.applyRuntimeConfig(); return this.status();
   }
   async withLock(work) {
-    const previous = this.multi.accountPurchaseTails.get('C') || Promise.resolve();
+    const previous = this.multi.accountPurchaseTails.get(this.slot) || Promise.resolve();
     let release; const held = new Promise(resolve => { release = resolve; });
-    this.multi.accountPurchaseTails.set('C', held);
+    this.multi.accountPurchaseTails.set(this.slot, held);
     try { await previous.catch(() => {}); return await work(); }
-    finally { release(); if (this.multi.accountPurchaseTails.get('C') === held) this.multi.accountPurchaseTails.delete('C'); }
+    finally { release(); if (this.multi.accountPurchaseTails.get(this.slot) === held) this.multi.accountPurchaseTails.delete(this.slot); }
   }
   async context() {
-    const file = path.join(this.dataDir, 'auto-purchase', 'funbox-account-c-session.json');
+    const file = this.sessionFile();
     let fingerprint;
     try { fingerprint = crypto.createHash('sha256').update(await fs.readFile(file)).digest('hex'); }
     catch (error) { if (error.code !== 'ENOENT') throw error; fingerprint = 'missing'; }
@@ -276,15 +339,15 @@ export class FunboxAppRedemption {
     return this.api;
   }
   rememberMember(api) {
-    this.memberProof = { api, at: this.now(), identity: this.multi.accountIdentity('C') };
+    this.memberProof = { api, at: this.now(), identity: this.multi.accountIdentity(this.slot) };
   }
   hasMemberProof(api) {
-    return this.memberProof?.api === api && this.memberProof.identity === this.multi.accountIdentity('C')
+    return this.memberProof?.api === api && this.memberProof.identity === this.multi.accountIdentity(this.slot)
       && this.now() - this.memberProof.at < AUTH_PROOF_TTL;
   }
   assertMember(contract) {
-    const account = this.credentials.getFunboxAccount('C').account.trim().toLowerCase();
-    if (account.includes('@') && contract.props.cart.customer.email.toLowerCase() !== account) throw fail('identity', '官網會員與 C 帳號不符');
+    const account = this.credentials.getFunboxAccount(this.slot).account.trim().toLowerCase();
+    if (account.includes('@') && contract.props.cart.customer.email.toLowerCase() !== account) throw fail('identity', '官網會員與指定帳號不符');
   }
   async checked(api, method, url, options = {}, job) {
     if (Date.parse(this.data.nextRetryAt || '') > this.now()) throw fail('cooldown', '網站冷卻時間內不再發送新請求');
@@ -319,13 +382,13 @@ export class FunboxAppRedemption {
     const r = await this.checked(api, 'get', ORIGIN + '/account', { timeout: READ_TIMEOUT });
     const html = await readAndReleaseResponse(r), $ = load(html);
     if (!r.ok() || /\/account\/login/.test(r.url()) || !$('a[href*="/account/logout"]').length) {
-      if (allowLogin && /\/account\/login/.test(r.url()) && typeof this.multi.adapters.C?._requestLogin === 'function') {
-        await this.multi.adapters.C._requestLogin({ request: api, storageState: ({ indexedDB, ...options } = {}) => api.storageState(options) }, { persist: true });
-        try { this.sessionFingerprint = crypto.createHash('sha256').update(await fs.readFile(path.join(this.dataDir, 'auto-purchase', 'funbox-account-c-session.json'))).digest('hex'); }
+      if (allowLogin && /\/account\/login/.test(r.url()) && typeof this.multi.adapters[this.slot]?._requestLogin === 'function') {
+        await this.multi.adapters[this.slot]._requestLogin({ request: api, storageState: ({ indexedDB, ...options } = {}) => api.storageState(options) }, { persist: true });
+        try { this.sessionFingerprint = crypto.createHash('sha256').update(await fs.readFile(this.sessionFile())).digest('hex'); }
         catch (error) { if (error.code !== 'ENOENT') throw error; }
         return this.member(api);
       }
-      throw fail('login', '帳號 C 未確認登入；請使用原有登入按鈕');
+      throw fail('login', '指定帳號 未確認登入；請使用原有登入按鈕');
     }
     this.rememberMember(api);
   }
@@ -370,14 +433,14 @@ export class FunboxAppRedemption {
     return { ...contract, snapshot: parseFunboxCartHtml(html, url) };
   }
   async preflight({ allowLogin = false } = {}) {
-    if (this.running || this.multi.accountPurchaseTails.has('C') || this.multi.adapters.C?.accountBrowser) throw fail('busy', 'C 正在執行，暫不插入登入檢查');
+    if (this.running || this.multi.accountPurchaseTails.has(this.slot) || this.multi.adapters[this.slot]?.accountBrowser) throw fail('busy', '指定帳號正在執行，暫不插入登入檢查');
     return this.withLock(async () => {
       const api = await this.context();
       await this.member(api, { allowLogin });
-      const profile = this.credentials.getPickupProfile(), setup = this.credentials.getPickupSetup('funbox', 'C');
+      const profile = this.credentials.getPickupProfile(), setup = this.credentials.getPickupSetup('funbox', this.slot);
       if (!profile.fullName || !/^09\d{8}$/.test(profile.phone || '')) throw fail('pickup', '收件姓名／手機未完整設定');
       if (setup?.storeInfo) validateFunboxStore(setup.storeInfo, profile);
-      await this.event('唯讀檢查完成：C 登入有效；門市' + (setup?.storeInfo ? '有已核對資料' : '送單前需官方選店') + '；沒有輸入序號或送單');
+      await this.event('唯讀檢查完成：指定帳號登入有效；門市' + (setup?.storeInfo ? '有已核對資料' : '送單前需官方選店') + '；沒有輸入序號或送單');
       return this.status();
     });
   }
@@ -391,7 +454,7 @@ export class FunboxAppRedemption {
   async publish(job, result) {
     const storage = this.state.data.commerce.autoPurchase;
     const key = 'funbox:special:' + job.id;
-    const record = { ...(storage.records[key] || {}), ...result, platform: 'funbox', accountSlot: 'C', accountIdentity: this.data.accountIdentity,
+    const record = { ...(storage.records[key] || {}), ...result, platform: 'funbox', accountSlot: this.slot, accountIdentity: this.data.accountIdentity,
       specialTask: true, taskKind: 'funbox_app_redemption', taskLabel: '方爸APP兌換／特別任務', taskId: 'funbox-special-' + job.id,
       product: job.product, quantity: 1, payment: 'seven_cod', steps: job.steps, startedAt: job.startedAt, completedAt: new Date(this.now()).toISOString() };
     storage.records[key] = record;
@@ -446,7 +509,7 @@ export class FunboxAppRedemption {
       const ok = add.ok(); await add.dispose(); if (!ok) addUncertain = true;
     } catch { addUncertain = true; }
     contract = await this.cart(api, product, job);
-    if (!contract) throw fail('cart', addUncertain ? '加車結果不明；保留 C，不重加' : '加車後未找到目標商品');
+    if (!contract) throw fail('cart', addUncertain ? '加車結果不明；保留指定帳號，不重加' : '加車後未找到目標商品');
     }
     job.emptyReads = 0;
     job.cartUrl = contract.cartUrl; job.variantId = product.variantId; await this.save();
@@ -477,7 +540,7 @@ export class FunboxAppRedemption {
     const optionResponse = await this.checked(api, 'get', contract.cartUrl + '/shipping_rates_and_payment_method_items', { params: { bonus_used: 0, cart_type: 'order' }, headers }, job);
     const choices = await readAndReleaseResponse(optionResponse, 'json'), optionsOk = optionResponse.ok();
     if (!optionsOk) throw fail('payment', '付款選項未讀取完成');
-    const profile = this.credentials.getPickupProfile(), setup = this.credentials.getPickupSetup('funbox', 'C');
+    const profile = this.credentials.getPickupProfile(), setup = this.credentials.getPickupSetup('funbox', this.slot);
     let store = contract.props.storeInfo || setup?.storeInfo;
     if (store) store = validateFunboxStore(store, profile);
     else store = await selectFunboxSevenStore({ api: {
@@ -563,9 +626,9 @@ export class FunboxAppRedemption {
   }
   async run() {
     if (this.now() < Date.parse(this.data.startAt) || !this.data.enabled || Date.parse(this.data.nextRetryAt || '') > this.now()) return;
-    if (!this.data.continuousRetry && this.now() > Date.parse(this.data.startAt) + 30 * 60000) { this.data.enabled = false; await this.event('兌換執行時段已結束，未執行項目保留；C 保持專用至手動停用'); return; }
+    if (!this.data.continuousRetry && this.now() > Date.parse(this.data.startAt) + 30 * 60000) { this.data.enabled = false; await this.event('兌換執行時段已結束，未執行項目保留；指定帳號保持專用至手動停用'); return; }
     return this.withLock(async () => {
-      if (this.multi.accountIdentity('C') !== this.data.accountIdentity) throw fail('identity', '帳號 C 已變更，保留原任務，不查認其他帳號訂單');
+      if (this.multi.accountIdentity(this.slot) !== this.data.accountIdentity) throw fail('identity', '指定帳號 已變更，保留原任務，不查認其他帳號訂單');
       const api = await this.context();
       try {
         // Product discovery and cart reads prove what is needed for this step.
@@ -576,7 +639,7 @@ export class FunboxAppRedemption {
           if(this.data.continuousRetry&&job.status==='unknown'){if(!await this.reconcileJob(api,job))break;}
           if(this.data.continuousRetry&&['adding','coupon_applying','cart_review'].includes(job.status))job.status='queued';
           if (job.status !== 'queued') continue;
-          if (this.multi.accountIdentity('C') !== this.data.accountIdentity) throw fail('identity', '帳號 C 已變更');
+          if (this.multi.accountIdentity(this.slot) !== this.data.accountIdentity) throw fail('identity', '指定帳號 已變更');
           try { await this.redeem(api, job); }
           catch (error) {
             const detail = redemptionFailure(error); job.error = detail.code; job.errorDetail = detail;
@@ -592,7 +655,7 @@ export class FunboxAppRedemption {
           await this.save();
           if (this.data.jobs.some(j => ACTIVE.has(j.status))) break;
         }
-        if (this.data.jobs.every(j => ['ordered', 'skipped'].includes(j.status))) { this.data.enabled = false; delete this.data.nextRetryAt; await this.event('本批特別任務全部結束；C 保持專用，手動停用後才恢復一般派單'); }
+        if (this.data.jobs.every(j => ['ordered', 'skipped'].includes(j.status))) { this.data.enabled = false; delete this.data.nextRetryAt; await this.event('本批特別任務全部結束；指定帳號保持專用，手動停用後才恢復一般派單'); }
       } finally { if (this.stopping && !this.data.jobs.some(j => ACTIVE.has(j.status))) { this.data.reserved = false; await this.save(); await this.reservation(false); } await this.applyRuntimeConfig(); }
     });
   }
@@ -614,7 +677,7 @@ export class FunboxAppRedemption {
   }
   async removeFeature(body) {
     if (body.confirmRemoveFeature !== true) throw fail('confirmation', '請確認移除特別任務入口；訂單與加密資料仍保留本機');
-    if (this.isReserved('C')) throw fail('hold', '先停用任務並處理未決交易，才能移除入口');
+    if (this.isReserved(this.slot)) throw fail('hold', '先停用任務並處理未決交易，才能移除入口');
     clearTimeout(this.timer); clearTimeout(this.warmTimer); this.disabled = true;
     await fs.writeFile(path.join(this.directory, 'disabled.flag'), 'disabled\n', { mode: 0o600 });
     await this.event('已移除特別任務入口；資料保留，不影響一般派單');
@@ -633,7 +696,7 @@ export class FunboxAppRedemption {
       const body = JSON.parse(text || '{}');
       if (this.disabled) throw fail('input', '特別任務入口已移除');
       const action = pathname.slice(PREFIX.length + 1);
-      const result = action === 'edit' ? this.editableStatus() : action === 'reschedule' ? await this.reschedule(body) : action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
+      const result = action === 'assign' ? await this.assign(body) : action === 'finish' ? await this.finish() : action === 'edit' ? this.editableStatus() : action === 'reschedule' ? await this.reschedule(body) : action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
       if (!result) throw fail('input', '不存在的特別任務操作'); json(res, 200, result);
     } catch (e) { json(res, 400, { error: ['input','busy','hold','completed','confirmation','account','price','cart','pickup','login','storage'].includes(e.code) ? e.message : '特別任務操作未完成；請查看本機狀態', code: e.code || 'failed' }); }
     return true;
