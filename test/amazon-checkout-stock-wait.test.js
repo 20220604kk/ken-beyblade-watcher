@@ -110,6 +110,16 @@ test('stop during red wait preserves location and issues no further request', as
   assert.ok(f.state.stockWait); assert.equal(f.calls.length, 2); assert.equal(f.client.submitted, false);
 });
 
+test('long stock competition discards stale history baseline; lost completion never adopts another matching order', async () => {
+  const state = { stockWait: { asin, url: origin + '/checkout/entry/buynow', snapshot: { asin },
+    tx: { asin, priceYen: 880, quantity: 1, baselineOrderIds: [], baselineCapturedAt: '2026-01-01' } } };
+  const f = fixture({ state, reads: [review()], finalTimeout: true });
+  assert.equal((await f.run()).status, 'submitted_unconfirmed');
+  assert.equal(f.state.tx.phase, 'submitted'); assert.equal(f.state.tx.baselineOrderIds, undefined);
+  assert.equal(f.calls.filter(c => c.path.includes('order-history')).length, 0);
+  assert.equal(f.calls.filter(c => c.path.endsWith('/place-order')).length, 1);
+});
+
 for (const patch of [{ quantity: 0 }, { quantity: 2 }, { target: 'B0TEST0002' }, { seller: 'Other' }, { mixed: true }, { points: true }]) {
   test(`stock return still rejects invalid review ${JSON.stringify(patch)}`, async () => {
     const f = fixture({ reads: [review(patch)] }); await assert.rejects(f.run());

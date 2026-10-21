@@ -29,6 +29,7 @@ async function fixture(work) {
     await page.addInitScript(()=>{window.confirm=()=>{throw new Error('native confirmation unavailable');};});
     await page.goto('http://127.0.0.1:3210/'); await page.addScriptTag({content:clientScript});
     await page.getByRole('button',{name:'特別',exact:true}).click();
+    await page.getByRole('dialog',{name:'方爸APP兌換',exact:true}).waitFor();
     await work({page,calls,setState:value=>{state={...state,...value};}}); assert.deepEqual(errors,[]);
   }finally{await browser.close();}
 }

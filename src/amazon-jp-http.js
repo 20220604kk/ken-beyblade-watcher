@@ -761,6 +761,9 @@ export class AmazonJpHttpClient {
     const { tx, reviewPage, review } = await this.prepareDirectCheckout(snapshot);
     await beforeSubmit(review.checkout);
     if (this.stockWaitEnabled && this.stockWait) {
+      // A stock competition can last minutes. An idle history baseline from
+      // before it cannot safely attribute somebody else's same-item order.
+      delete tx.baselineOrderIds; delete tx.baselineCapturedAt;
       this.emitEvidence('response', reviewPage, { source: '紅字頁回流後的官方結帳回應' });
       await this.onStockWait(null); this.stockWait = null;
     }
