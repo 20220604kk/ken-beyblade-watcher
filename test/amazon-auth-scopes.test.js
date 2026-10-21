@@ -18,6 +18,7 @@ function fixture(t, {slot='A',history='signin',productIssue='',buyIssue='',final
     else if(path==='/checkout/entry/buynow'){html=review();issue=buyIssue;}
     else if(path.endsWith('/place-order')){status=302;headers.location='/gp/buy/thankyou/handlers/display.html';issue=finalIssue;}
     else if(path.includes('/thankyou/'))html=completion(finalIssue==='no_id'?'':undefined);
+    else if(path==='/ap/signin')html='<form name="signIn"><input id="ap_email"></form>';
     else assert.fail('Unexpected request '+path);
     if(issue==='signin'){status=302;headers.location='/ap/signin?session=PRIVATE_DIAGNOSTIC_VALUE';html='';}
     else if(issue==='captcha')html='<title>Robot Check</title><input id="captchacharacters">';
@@ -94,7 +95,9 @@ for(const issue of ['signin','captcha'])test(`商品頁真正 ${issue} 保留商
 test('直購結帳要求登入標示 checkout；本輪沒有最終送單',async t=>{
   const f=fixture(t,{buyIssue:'signin'});f.available(true);
   await assert.rejects(f.monitor.scanOnce({purchase:true,trigger:'poll'}));
-  assert.equal(f.monitor.storage().status,'needs_login');assert.equal(f.monitor.storage().loginIssueScope,'checkout');
+  assert.equal(f.monitor.storage().status,'waiting_poll');assert.equal(f.monitor.storage().checkoutAccessIssue.scope,'checkout');
+  assert.equal(f.monitor.canSchedule(),true);const count=f.calls.filter(c=>c.method==='POST').length;
+  await f.monitor.scanOnce({purchase:true,trigger:'poll'});assert.equal(f.calls.filter(c=>c.method==='POST').length,count);
   assert.equal(f.calls.filter(c=>c.path.endsWith('/place-order')).length,0);
 });
 
@@ -131,7 +134,19 @@ for(const issue of ['signin','captcha'])test(`待機清車 ${issue} 只停清車
 test('HTTP 錯誤 scope 綁定原操作，不洩漏登入跳轉的 session query',async()=>{
   for(const [url,scope] of [['/dp/'+asin,'product'],['/checkout/entry/buynow','checkout'],
     ['/-/zh/gp/your-account/order-history','order_history'],['/your-orders/order-details','order_detail'],['/-/zh/gp/cart/view.html','cart']]) {
-    const client=new AmazonJpHttpClient({request:{fetch:async()=>({status:()=>302,headers:()=>({location:'/ap/signin?session=PRIVATE'}),text:async()=>'',dispose:async()=>{}})}});
-    await assert.rejects(client.request(url),error=>error.code==='AMAZON_LOGIN_REQUIRED'&&error.requestScope===scope&&!JSON.stringify(error).includes('PRIVATE'));
+    const client=new AmazonJpHttpClient({request:{fetch:async url=>({status:()=>url.includes('/ap/signin')?200:302,headers:()=>({location:'/ap/signin?session=PRIVATE'}),text:async()=>'<input id="ap_email">',dispose:async()=>{}})}});
+    await assert.rejects(client.request(url),error=>error.code===(scope==='checkout'?'AMAZON_CHECKOUT_AUTH_REQUIRED':'AMAZON_LOGIN_REQUIRED')&&error.requestScope===scope&&!JSON.stringify(error).includes('PRIVATE'));
   }
+});
+
+test('restart rechecks legacy checkout redirect and auxiliary auth once; unknown final intent remains held', async t => {
+  const f=fixture(t),m=f.monitor;
+  Object.assign(m.storage(),{status:'needs_login',loginIssueScope:'checkout',orderHistoryCheck:{status:'needs_login',scope:'order_history'}});
+  await m.start();assert.equal(m.storage().status,'waiting_poll');assert.equal(m.canSchedule(),true);
+  assert.equal(m.storage().orderHistoryCheck,undefined);assert.equal(m.storage().authContractVersion,2);
+  m.storage().orderHistoryCheck={status:'needs_login',scope:'order_history'};
+  await m.start();assert.equal(m.storage().orderHistoryCheck.status,'needs_login','only invalidate old contract once');
+  m.storage().status='needs_login';m.storage().loginIssueScope='checkout';m.storage().apiTransaction={phase:'submitted',asin};
+  await m.start();assert.equal(m.storage().status,'needs_review');assert.equal(m.canSchedule(),false);
+  assert.equal(f.calls.length,0);
 });

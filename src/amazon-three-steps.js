@@ -32,6 +32,8 @@ export function amazonThreeSteps(events = []) {
       case 'api_checkout_entry': case 'proceed_checkout': case 'checkout_inspect': case 'checkout_continue':
         stage = '02'; action = '讀取安全結帳'; status = '檢查中'; break;
       case 'checkout_browser_entry': stage = '02'; action = '啟用背景瀏覽器結帳入口'; status = '執行中'; break;
+      case 'checkout_stock_wait': stage = '02'; action = '紅字頁等回流，每秒重查（不重加／不送數量0）'; status = '等待'; break;
+      case 'checkout_cart_empty': stage = '02'; action = '購物車已空，回商品頁等新報價'; status = '等待'; break;
       case 'checkout_verified': stage = '02'; action = '發現購買按鈕'; status = '成功'; break;
       case 'submit_order': stage = '02'; submitted = true; action = '送出訂單'; status = '執行中'; break;
       case 'api_order_check': stage = '03'; action = '查詢正式訂單'; status = '檢查中'; break;
@@ -46,7 +48,8 @@ export function amazonThreeSteps(events = []) {
         action = submitted ? '送單結果待核對' : /沒有可用的立即購買按鈕/.test(error) ? '直購按鈕已消失，繼續等補貨'
           : /結帳入口回傳 HTTP 404/.test(error) ? '結帳入口不存在（HTTP 404）'
           : /安全結帳只收到空白頁框/.test(error) ? '結帳頁空白，下一輪切換瀏覽器入口'
-          : /結帳時庫存不足/.test(error) ? '結帳時庫存已不足，繼續等補貨' : /登入/.test(error) ? '需要登入'
+          : /購物車已空/.test(error) ? '購物車已空，回商品頁等新報價'
+          : /結帳時庫存不足/.test(error) ? '結帳時庫存已不足，繼續等補貨' : /登入/.test(error) ? '此流程需核對登入'
           : /驗證/.test(error) ? '需要人工驗證' : /限流|429|503|降速/.test(error) ? '官網暫時限流'
             : /逾時|回應不明|連線/.test(error) ? '官網回應未確認' : '本輪失敗';
         status = submitted ? '待核對' : '失敗'; break;

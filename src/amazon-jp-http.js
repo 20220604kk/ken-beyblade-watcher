@@ -1,6 +1,7 @@
 // Authenticated Amazon website HTTP contracts, not a public purchasing API.
 // The account's BrowserContext.request owns cookies; no credential handoff files.
 import { load } from 'cheerio';
+import { amazonCheckoutStockState, amazonStockWaitUrl } from './amazon-checkout-stock-wait.js';
 import { AMAZON_JP_SELLER_ID, extractModelCode, parseYen } from './amazon-jp-monitor.js';
 
 export const AMAZON_HTTP_ORIGIN = 'https://www.amazon.co.jp';
@@ -232,9 +233,10 @@ function moneyAfter(value, labels) {
 
 export function parseAmazonHttpReview(page, expected) {
   const $ = page.$, value = bodyText($);
+  if (amazonCheckoutStockState(page, expected.asin) === 'empty') throw fail('Amazon 購物車已空，回商品頁等待新報價', 'AMAZON_CHECKOUT_CART_EMPTY');
   // The official update-items page is an ordinary stock race, not a missing
   // final-submit contract. Never press its Continue button or submit quantity 0.
-  if (!$('#spc-form').length && /ご指定の数量をご用意できません|无法再提供您所请求的数量|無法再提供您所請求的數量|not able to provide.*quantity/i.test(value)) {
+  if (!$('#spc-form').length && amazonCheckoutStockState(page, expected.asin) === 'stock_wait') {
     throw fail('結帳時庫存不足，尚未執行最終送單；回到商品監控重試', 'AMAZON_CHECKOUT_STOCK_CHANGED');
   }
   const form = $('#spc-form').first();
@@ -352,7 +354,8 @@ export function matchesAmazonOfficialDetail(page, orderId, expected) {
 }
 
 export class AmazonJpHttpClient {
-  constructor({ request, recordStep = async () => {}, checkpoint = async () => {}, canContinue = () => true, parallelPreflight = false, fastCheckout = false, directBuyNow = false, idleOrderBaseline = null, captureEvidence = () => {}, authorizeFinalSubmit = async () => {}, browserDirectEntry = null }) {
+  constructor({ request, recordStep = async () => {}, checkpoint = async () => {}, canContinue = () => true, parallelPreflight = false, fastCheckout = false, directBuyNow = false, idleOrderBaseline = null, captureEvidence = () => {}, authorizeFinalSubmit = async () => {}, browserDirectEntry = null,
+    stockWaitEnabled = false, stockWait = null, onStockWait = async () => {}, waitFor = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
     this.transport = request;
     this.recordStep = recordStep;
     this.checkpoint = checkpoint;
@@ -368,6 +371,7 @@ export class AmazonJpHttpClient {
     this.captureEvidence = captureEvidence;
     this.checkoutEvidenceStarted = false;
     this.checkoutTrace = [];
+    Object.assign(this, { stockWaitEnabled, stockWait, onStockWait, waitFor });
   }
 
   beginCheckoutEvidence(page) {
@@ -405,11 +409,12 @@ export class AmazonJpHttpClient {
     for (let redirects = 0; redirects < 6; redirects++) {
       const target = new URL(url, AMAZON_HTTP_ORIGIN);
       if (target.origin !== AMAZON_HTTP_ORIGIN) throw fail('日亞 API 拒絕跨網域請求');
-      if (/\/ap\/(?:signin|mfa|cvf)/i.test(target.pathname)) throw fail('日亞登入失效，請開啟登入視窗', 'AMAZON_LOGIN_REQUIRED');
+      if (/\/ap\/(?:mfa|cvf)/i.test(target.pathname)) throw fail('此流程要求額外驗證，商品登入狀態另行核對', 'AMAZON_VERIFICATION_REQUIRED');
+      if (/\/ap\/signin/i.test(target.pathname) && method !== 'GET') throw fail('登入只使用官方登入視窗，本流程不代送登入表單', 'AMAZON_LOGIN_REQUIRED');
       const headers = { Accept: '*/*', 'Accept-Language': 'ja-JP,zh-CN;q=0.8,en;q=0.6' };
       if (referer) headers.Referer = referer;
       if (fields) Object.assign(headers, { Origin: AMAZON_HTTP_ORIGIN, 'Content-Type': 'application/x-www-form-urlencoded' });
-      if(this.checkoutEvidenceStarted){this.lastCheckoutRequest={url:target.href,method,status:null,responseReceived:false};this.checkoutTrace.push(this.lastCheckoutRequest);}
+      if(this.checkoutEvidenceStarted){this.lastCheckoutRequest={url:target.href,method,status:null,responseReceived:false};this.checkoutTrace.push(this.lastCheckoutRequest);this.checkoutTrace=this.checkoutTrace.slice(-60);}
       let response, html, status, responseHeaders;
       try {
         // maxRetries=0 is essential: a timed-out mutation must never be replayed.
@@ -435,7 +440,7 @@ export class AmazonJpHttpClient {
       const $ = load(html || '');
       if ($('form[action*="validateCaptcha"], #captchacharacters, form[action*="/ap/cvf"]').length
         || /Robot Check|Enter the characters you see|画像に表示されている文字/i.test(bodyText($))) throw fail('日亞要求人工驗證，請在登入視窗處理', 'AMAZON_VERIFICATION_REQUIRED');
-      if ($('#ap_email, form[name="signIn"]').length) throw fail('日亞登入失效，請開啟登入視窗', 'AMAZON_LOGIN_REQUIRED');
+      if ($('#ap_email, #ap_password, form[name="signIn"]').length) throw fail('此流程顯示官方登入表單，請開啟登入視窗核對', 'AMAZON_LOGIN_REQUIRED');
       if (status === 404) {
         if (this.checkoutEvidenceStarted) throw fail('日亞結帳入口回傳 HTTP 404，尚未取得安全結帳頁；保留證據，不重送', 'AMAZON_CHECKOUT_NOT_FOUND');
         throw fail('日亞 API 商品／頁面不存在', 'AMAZON_PRODUCT_NOT_FOUND');
@@ -457,6 +462,9 @@ export class AmazonJpHttpClient {
       // Keep the ORIGINAL operation across a sign-in redirect. No query,
       // cookies, session IDs or HTML enter the diagnostic metadata.
       error.requestScope = requestScope;
+      if (requestScope === 'checkout' && error.code === 'AMAZON_LOGIN_REQUIRED') {
+        error.code = 'AMAZON_CHECKOUT_AUTH_REQUIRED'; error.message = '結帳流程需要再次登入確認；商品監控繼續';
+      }
       throw error;
     }
   }
@@ -650,7 +658,7 @@ export class AmazonJpHttpClient {
     this.submitted = true;
     try { await this.sendForm(reviewPage, review.form, 'placeYourOrder1', review.overrides); }
     catch (error) {
-      if (['AMAZON_RATE_LIMITED', 'AMAZON_LOGIN_REQUIRED', 'AMAZON_VERIFICATION_REQUIRED'].includes(error.code)) throw error;
+      if (['AMAZON_RATE_LIMITED', 'AMAZON_LOGIN_REQUIRED', 'AMAZON_CHECKOUT_AUTH_REQUIRED', 'AMAZON_VERIFICATION_REQUIRED'].includes(error.code)) throw error;
       await this.recordStep('api_submit_unknown', { step: 8 });
     }
     const result = await this.confirmOrder(transaction);
@@ -662,6 +670,16 @@ export class AmazonJpHttpClient {
   async prepareDirectCheckout(snapshot) {
     if (this.addAttempted || this.submitted) throw fail('日亞禁止重複直購或送單');
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不直購');
+    if (this.stockWaitEnabled && this.stockWait?.asin === snapshot.asin) {
+      const tx = { ...this.stockWait.tx, phase: 'buy_now', route: 'direct_buy_now' };
+      await this.checkpoint(tx); this.addAttempted = true;
+      this.checkoutEvidenceStarted = true;
+      const page = await this.request(amazonStockWaitUrl(this.stockWait.url));
+      this.emitEvidence('response', page, { source: '保留結帳頁的唯讀重查回應' });
+      const reviewPage = await this.waitAtCheckout(page, tx, snapshot);
+      const review = parseAmazonHttpReview(reviewPage, tx);
+      return { tx, reviewPage, review };
+    }
     // Reuse only the exact snapshot and validated form obtained by THIS client
     // in the current round. Never reuse a previous poll/other ASIN/session.
     const reuse = this.directProductSnapshot === snapshot && this.directProductPage
@@ -706,13 +724,46 @@ export class AmazonJpHttpClient {
     }
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不送單');
     // Parse only this response: no cart entry, old orders, cleanup or page tour.
+    if (this.stockWaitEnabled) reviewPage = await this.waitAtCheckout(reviewPage, tx, snapshot);
     const review = parseAmazonHttpReview(reviewPage, tx);
     return { tx, reviewPage, review };
+  }
+
+  async waitAtCheckout(page, tx, snapshot) {
+    let count = this.stockWait?.refreshCount || 0;
+    while (this.canContinue()) {
+      if (/\/(?:gp\/buy\/thankyou\/|checkout\/.*(?:thank|confirmation))/.test(new URL(page.url).pathname)) {
+        this.submitted = true; tx.phase = 'submitted'; await this.checkpoint(tx);
+        throw fail('重查結帳時出現完成頁，保留查單，不再刷新', 'AMAZON_UNEXPECTED_COMPLETION');
+      }
+      const state = amazonCheckoutStockState(page, tx.asin);
+      if (state === 'empty') {
+        await this.onStockWait(null); await this.checkpoint(null); this.stockWait = null;
+        await this.recordStep('checkout_cart_empty', { step: 2 });
+        throw fail('Amazon 購物車已空，回商品頁等待新報價', 'AMAZON_CHECKOUT_CART_EMPTY');
+      }
+      if (state === 'mismatch') throw fail('紅字頁商品與本次任務不符，保留待核對', 'AMAZON_CART_REVIEW');
+      if (state !== 'stock_wait') return page;
+      const url = amazonStockWaitUrl(page.url);
+      const previous = this.stockWait;
+      this.stockWait = { asin: tx.asin, url, tx: { ...tx }, snapshot, since: previous?.since || new Date().toISOString(), refreshCount: count };
+      await this.onStockWait(this.stockWait, { durable: !previous || previous.url !== url });
+      if (count === 0 || count % 30 === 0) await this.recordStep('checkout_stock_wait', { step: 2, refreshCount: count, state: 'waiting' });
+      await this.waitFor(Math.max(0, 1000 - (Number(page.durationMs) || 0)));
+      if (!this.canContinue()) throw fail('任務已停止，保留紅字頁位置，未送單', 'AMAZON_STOCK_WAIT_STOPPED');
+      // Read-only refresh of the received page, not a replay of Buy Now.
+      page = await this.request(url); count++;
+    }
+    throw fail('任務已停止，未送單', 'AMAZON_STOCK_WAIT_STOPPED');
   }
 
   async checkoutDirect(snapshot, { beforeSubmit }) {
     const { tx, reviewPage, review } = await this.prepareDirectCheckout(snapshot);
     await beforeSubmit(review.checkout);
+    if (this.stockWaitEnabled && this.stockWait) {
+      this.emitEvidence('response', reviewPage, { source: '紅字頁回流後的官方結帳回應' });
+      await this.onStockWait(null); this.stockWait = null;
+    }
     Object.assign(tx, { totalYen: review.checkout.totalYen, shippingYen: review.checkout.shippingYen, phase: 'submitted' });
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不送單');
     await this.checkpoint(tx);
@@ -725,7 +776,7 @@ export class AmazonJpHttpClient {
     let completed;
     try { completed = await this.sendForm(reviewPage, review.form, 'placeYourOrder1', review.overrides); }
     catch (error) {
-      if (['AMAZON_RATE_LIMITED', 'AMAZON_LOGIN_REQUIRED', 'AMAZON_VERIFICATION_REQUIRED'].includes(error.code)) throw error;
+      if (['AMAZON_RATE_LIMITED', 'AMAZON_LOGIN_REQUIRED', 'AMAZON_CHECKOUT_AUTH_REQUIRED', 'AMAZON_VERIFICATION_REQUIRED'].includes(error.code)) throw error;
     }
     let orderId = completed ? amazonOrderIdFromCompletion(completed) : '';
     let result = { status: orderId ? 'ordered' : 'submitted_unconfirmed', snapshot: { orderId,

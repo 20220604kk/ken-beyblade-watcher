@@ -14,11 +14,11 @@ function fixture(t) {
   return { monitor, config, state };
 }
 
-test('A two-second schedule never overlaps an active check, preserves cooldown and pending transaction locks', async t => {
+test('A one-second schedule never overlaps an active check, preserves cooldown and pending transaction locks', async t => {
   const { monitor } = fixture(t); const scheduled = [];
   monitor.scheduleNext = delay => scheduled.push(delay);
-  await monitor.start(); assert.equal(scheduled.at(-1), 2000);
-  monitor.taskClock = Date.now(); monitor.rearm(); assert.ok(scheduled.at(-1) <= 2000);
+  await monitor.start(); assert.equal(scheduled.at(-1), 1000);
+  monitor.taskClock = Date.now(); monitor.rearm(); assert.ok(scheduled.at(-1) <= 1000);
   monitor.running = true; const before = scheduled.length; monitor.rearm(); assert.equal(scheduled.length, before);
   monitor.running = false; monitor.setBackoff(180000); monitor.rearm(); assert.ok(scheduled.at(-1) >= 179900);
   monitor.storage().apiTransaction = { phase: 'submitted' }; const count = scheduled.length;
@@ -26,12 +26,12 @@ test('A two-second schedule never overlaps an active check, preserves cooldown a
   assert.equal(monitor.canSchedule(), false);
 });
 
-test('BC share the two-second cadence and locks, with staggered initial starts rather than an API burst', async t => {
-  for (const [slot, initial] of [['B', 3650], ['C', 5300]]) {
+test('BC share the one-second cadence and locks, with staggered initial starts rather than an API burst', async t => {
+  for (const [slot, initial] of [['B', 2650], ['C', 4300]]) {
     const { monitor } = fixture(t); monitor.slot = slot;
     const scheduled = []; monitor.scheduleNext = delay => scheduled.push(delay);
     await monitor.start(); assert.equal(scheduled.at(-1), initial);
-    monitor.taskClock = Date.now(); monitor.rearm(); assert.ok(scheduled.at(-1) <= 2000);
+    monitor.taskClock = Date.now(); monitor.rearm(); assert.ok(scheduled.at(-1) <= 1000);
     monitor.running = true; const count = scheduled.length; monitor.rearm(); assert.equal(scheduled.length, count);
     monitor.running = false; monitor.setBackoff(60_000); monitor.rearm(); assert.ok(scheduled.at(-1) >= 59_000);
     monitor.storage().apiTransaction = { phase: 'submitted' };

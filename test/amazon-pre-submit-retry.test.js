@@ -20,9 +20,9 @@ test('only exact pre-final direct intent can recover; unknown final send and con
   }
 });
 
-test('three failed preparations use 2s/5s/30s, then resume with a fresh bounded retry window; Retry-After wins', () => {
+test('ordinary pre-final failures retry at one second; Retry-After wins', () => {
   let now = 1_700_000_000_000, previous;
-  for (const delay of [2000, 5000, 30_000, 2000]) {
+  for (const delay of [1000, 1000, 1000, 1000]) {
     previous = nextAmazonPreSubmitRetry(previous, { asin, now });
     assert.equal(previous.delayMs, delay); now += delay;
   }
@@ -42,7 +42,8 @@ function fixture(t, { slot = 'A', failBuy = false, finalTimeout = false, captcha
       if (failBuy) throw new Error('synthetic lost Buy Now response');
       if (rateLimited) { status = 429; headers['retry-after'] = '120'; }
       if (unexpectedCompletion) { status = 302; headers.location = '/gp/buy/thankyou/handlers/display.html'; }
-      html = captcha ? '<h1>Robot Check</h1>' : available ? review() : stockPage;
+      if (options.method === 'GET' && !available) html = '<h1>Amazonカートは空です</h1>';
+      else html = captcha ? '<h1>Robot Check</h1>' : available ? review() : stockPage;
     } else if (p.endsWith('/place-order')) {
       if (finalTimeout) throw new Error('synthetic lost FINAL response');
       status = 302; headers.location = '/gp/buy/thankyou/handlers/display.html';
@@ -66,11 +67,11 @@ test('official update-items quantity-shortage page is stock competition, not a m
 for (const slot of ['A', 'B', 'C']) {
   test(`${slot}: stock loss in 02 resumes automatically without cart/order tour, then a later fresh quote can succeed once`, async t => {
     const f = fixture(t, { slot });
-    await assert.rejects(f.poll(), { code: 'AMAZON_CHECKOUT_STOCK_CHANGED' });
+    await assert.rejects(f.poll(), { code: 'AMAZON_CHECKOUT_CART_EMPTY' });
     assert.equal(f.config.enabled, true); assert.equal(f.monitor.canSchedule(), true); assert.ok(f.monitor.timer);
     assert.equal(f.monitor.hasPendingApiTransaction(), false); assert.equal(f.monitor.storage().status, 'waiting_poll');
-    assert.equal(f.monitor.storage().preSubmitRetry.attempts, 1);
-    assert.match(f.monitor.status().purchaseSteps.at(-1).action, /2秒後重試/);
+    assert.ok(Date.parse(f.monitor.storage().backoffUntil) > Date.now());
+    assert.match(f.monitor.status().purchaseSteps.at(-1).action, /購物車已空/);
     assert.equal(f.monitor.status().purchaseSteps.at(-1).step, '02');
     assert.equal(f.calls.filter(c => c.p.endsWith('/place-order')).length, 0);
     delete f.monitor.storage().backoffUntil; f.available();
@@ -116,7 +117,8 @@ test('pre-final retry respects official cooldown and real human verification; no
   assert.equal(rate.monitor.storage().preSubmitRetry.delayMs, 120_000);
   const captcha = fixture(t, { captcha: true });
   await assert.rejects(captcha.poll(), { code: 'AMAZON_VERIFICATION_REQUIRED' });
-  assert.equal(captcha.monitor.storage().status, 'needs_verification'); assert.equal(captcha.monitor.canSchedule(), false);
+  assert.equal(captcha.monitor.storage().status, 'waiting_poll'); assert.equal(captcha.monitor.canSchedule(), true);
+  assert.equal(captcha.monitor.storage().checkoutAccessIssue.status, 'needs_verification');
 });
 test('state-write failure restores pending intent and stops instead of sending another purchase', async t => {
   const f = fixture(t); f.monitor.storage().apiTransaction = tx();
@@ -129,7 +131,7 @@ test('race permits new preparation IDs with bounded retries but never reuses any
   const state = { data: {}, writeSnapshot: async () => {} }, config = { enabled: true, targetUrl: origin + '/dp/' + asin };
   const c = new AmazonRaceCoordinator({ state, getConfig: () => config, now: () => now });
   let lease = await c.begin('A', 'api', asin); const waveId = lease.waveId;
-  for (const delay of [2000, 5000, 30_000]) {
+  for (const delay of [1000, 1000, 1000]) {
     await c.finish(lease, { status: 'failed' });
     assert.equal(Date.parse(c.status('A').routes.api.retryAt) - now, delay);
     await assert.rejects(c.begin('A', 'api', asin)); now += delay;

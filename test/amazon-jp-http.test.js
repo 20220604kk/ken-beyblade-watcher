@@ -318,11 +318,11 @@ test('verification after add stops before more requests; HTTP429 respects Retry-
 });
 
 test('HTTP rejects external redirects, sign-in, 307 replay and redacts transport failure', async () => {
-  for (const [status, location, expected] of [[302, 'https://evil.example/checkout', /跨網域/], [302, '/ap/signin', /登入失效/]]) {
+  for (const [status, location, expected] of [[302, 'https://evil.example/checkout', /跨網域/], [302, '/ap/signin', /官方登入表單/]]) {
     let calls = 0;
-    const client = new AmazonJpHttpClient({ request: { fetch: async () => { calls++; return { status: () => status,
-      headers: () => ({ location }), text: async () => '', dispose: async () => {} }; } } });
-    await assert.rejects(client.readOffer(asin), expected); assert.equal(calls, 1);
+    const client = new AmazonJpHttpClient({ request: { fetch: async url => { calls++; const signin=url.includes('/ap/signin');return { status: () => signin?200:status,
+      headers: () => ({ location }), text: async () => signin?'<input id="ap_email">':'', dispose: async () => {} }; } } });
+    await assert.rejects(client.readOffer(asin), expected); assert.equal(calls, location==='/ap/signin'?2:1);
   }
   const replay = clientFixture({ submitStatus: 307 });
   // The POST is never replayed; GET order reconciliation can still prove success.
@@ -751,8 +751,8 @@ test('ABC API opts into direct buy now without preflight; browser and explicitly
     assert.equal(client.parallelPreflight, false);
     assert.equal(client.directBuyNow, true);
     assert.equal(client.fastCheckout, true);
-    assert.equal(f.monitor.pollIntervalMs(), 2000);
-    assert.equal(f.monitor.status().pollIntervalSeconds, 2);
+    assert.equal(f.monitor.pollIntervalMs(), 1000);
+    assert.equal(f.monitor.status().pollIntervalSeconds, 1);
     f.config.fastLane = false;
     assert.equal(f.monitor.fastLaneEnabled(), false); assert.equal(f.monitor.pollIntervalMs(), 5000);
     f.config.fastLane = true;
@@ -769,7 +769,7 @@ test('BC use the same complete direct-product route, evidence and no-replay prot
     f.monitor.orderHistory.captureEvidence = (_record, kind, value) => captures.push({ kind, status: value.status });
     assert.equal((await f.monitor.scanOnce({ purchase: true, trigger: 'poll' })).status, 'ordered');
     assert.equal(f.monitor.status().checkoutRoute, 'direct_buy_now');
-    assert.equal(f.monitor.status().pollIntervalSeconds, 2);
+    assert.equal(f.monitor.status().pollIntervalSeconds, 1);
     assert.equal(f.calls.filter(call => call.path.startsWith('/dp/')).length, 1);
     assert.equal(f.calls.some(call => /aodAjaxMain|cart\/view|add-to-cart|order-history/.test(call.path)), false);
     assert.deepEqual(f.calls.filter(call => call.method === 'POST').map(call => call.path), ['/checkout/entry/buynow', '/checkout/p/fixture/spc/place-order']);
