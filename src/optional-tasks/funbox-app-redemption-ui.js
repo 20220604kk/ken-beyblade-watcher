@@ -24,7 +24,7 @@ export function redemptionClient() {
     const code = el('input'); code.type = 'text'; code.autocomplete = 'off'; code.spellcheck = false; code.placeholder = 'XXXX-XXXX-XXXX'; code.value = savedCodes.get(job.id) || ''; code.setAttribute('aria-label', '兌換序號'); node.append(code);
     const moves = el('div', '', 'special-move');
     for (const [text, move] of [['↑', -1], ['↓', 1], ['×', 0]]) { const button = el('button', text); button.type = 'button'; button.setAttribute('aria-label', move === -1 ? '上移任務' : move === 1 ? '下移任務' : '移除任務'); button.onclick = () => { if (move < 0 && node.previousElementSibling) node.previousElementSibling.before(node); else if (move > 0 && node.nextElementSibling) node.nextElementSibling.after(node); else if (!move) node.remove(); dirty = true; renumber(); paint(); }; moves.append(button); }
-    node.append(moves); node.append(el('small', (labels[job.status] || '待儲存') + (job.orderNumber ? ' · ' + job.orderNumber + ' · NT$' + job.amount : '') + (job.error ? ' · ' + job.error : '')));
+    node.append(moves); node.append(el('small', (labels[job.status] || '待儲存') + (job.orderNumber ? ' · ' + job.orderNumber + ' · NT$' + job.amount : '') + (job.error ? ' · ' + (job.errorDetail?.reason || job.error) : '')));
     node.oninput = () => { dirty = true; paint(); }; return node;
   }
   function renumber() { [...dialog.querySelectorAll('.funbox-special-job')].forEach((node, i) => { node.querySelector('b').textContent = String(i + 1); }); }
@@ -34,16 +34,19 @@ export function redemptionClient() {
     accountRow?.classList.toggle('funbox-special-reserved', latest.reserved);
     for (const button of document.querySelectorAll('#funbox-sheet-actions-C button:not([data-funbox-special])')) button.disabled = latest.reserved;
     if (latest.reserved) {
-      const status = document.getElementById('funbox-sheet-api-C'); if (status) { status.textContent = '特別任務 · ' + (latest.running ? '執行中' : latest.jobs.some(j => ['unknown', 'cart_review'].includes(j.status)) ? '待核對／保護中' : latest.jobs.every(j => ['ordered','skipped'].includes(j.status)) ? '本批結束／C 專用' : latest.enabled ? '等待 10:00' : '已停止／C 專用'); status.className = 'funbox-special-badge'; }
+      const status = document.getElementById('funbox-sheet-api-C'); if (status) {
+        const retrySeconds = Math.max(0, Math.ceil((Date.parse(latest.nextRetryAt || '') - Date.now()) / 1000)) || 0;
+        status.textContent = '特別任務 · ' + (latest.running ? '執行中' : latest.jobs.some(j => j.status === 'unknown') ? '自動查單／不重送' : latest.jobs.every(j => ['ordered','skipped'].includes(j.status)) ? '本批結束／C 專用' : latest.enabled ? Date.parse(latest.startAt) > Date.now() ? '等待預定時間' : retrySeconds ? retrySeconds + '秒後自動重試' : '準備接續執行' : latest.jobs.some(j => j.status === 'cart_review') ? '待核對／保護中' : '已停止／C 專用'); status.className = 'funbox-special-badge';
+      }
       const payment = document.getElementById('funbox-sheet-payment-C'); if (payment) payment.textContent = '7-11 貨到付款';
       const pending = document.getElementById('funbox-sheet-pending-C'); if (pending) pending.textContent = String(latest.jobs.filter(j => !['ordered','skipped'].includes(j.status)).length);
     }
     if (!dialog?.open) return;
     dialog.querySelector('[data-state]').textContent = latest.reserved ? 'C 已專用於特別任務；A／B 維持原流程' : '尚未啟用；目前不會送單';
-    dialog.querySelector('[data-logs]').textContent = latest.events.slice(-60).map(e => new Date(e.at).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + ' ' + e.label + (e.httpStatus ? ' · HTTP ' + e.httpStatus : '')).join('\n') || '尚無執行紀錄';
+    dialog.querySelector('[data-logs]').textContent = latest.events.slice(-60).map(e => new Date(e.at).toLocaleTimeString('zh-TW', { timeZone: 'Asia/Taipei', hour12: false }) + ' ' + e.label + (e.httpStatus ? ' · HTTP ' + e.httpStatus : '') + (Number.isFinite(e.durationMs) ? ' · ' + e.durationMs + 'ms' : '') + (e.reason ? ' · ' + e.reason : '') + (e.retryAt ? ' · 下次 ' + new Date(e.retryAt).toLocaleTimeString('zh-TW', { timeZone:'Asia/Taipei',hour12:false }) : '')).join('\n') || '尚無執行紀錄';
     for (const button of dialog.querySelectorAll('[data-edit]')) button.disabled = latest.reserved || actionBusy || Boolean(pendingConfirmation);
     for (const node of dialog.querySelectorAll('.funbox-special-job')) for (const input of node.querySelectorAll('input,select,button')) input.disabled = latest.reserved || actionBusy || Boolean(pendingConfirmation);
-    for (const node of dialog.querySelectorAll('.funbox-special-job')) { const job = latest.jobs.find(j => j.id === node.dataset.id); if (job) node.querySelector('small').textContent = '特別任務 · ' + (labels[job.status] || job.status) + (job.orderNumber ? ' · '+job.orderNumber+' · NT$'+job.amount : '') + (job.error ? ' · '+job.error : ''); }
+    for (const node of dialog.querySelectorAll('.funbox-special-job')) { const job = latest.jobs.find(j => j.id === node.dataset.id); if (job) node.querySelector('small').textContent = '特別任務 · ' + (labels[job.status] || job.status) + (job.orderNumber ? ' · '+job.orderNumber+' · NT$'+job.amount : '') + (job.error ? ' · '+(job.errorDetail?.reason || job.error) : ''); }
     let cleanup = dialog.querySelector('[data-cleanup]');
     const review = latest.jobs.find(j => j.status === 'cart_review');
     if (review && !cleanup) { cleanup = el('button', '移除本任務未送單商品'); cleanup.dataset.cleanup='1'; cleanup.type='button'; cleanup.onclick=()=>askConfirmation('只移除本特別任務、尚未送單的指定商品？未知訂單禁止移除。','discard-cart',{id:latest.jobs.find(j=>j.status==='cart_review')?.id,confirmRemoveOwnItem:true});dialog.querySelector('.funbox-special-actions').append(cleanup); }

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { FunboxAppRedemption, validateRows, assertRedemptionCoupon, exactCart, selectConflictForm } from '../src/optional-tasks/funbox-app-redemption.js';
+import { FunboxAppRedemption, validateRows, assertRedemptionCoupon, exactCart, selectConflictForm, redemptionFailure } from '../src/optional-tasks/funbox-app-redemption.js';
 import { PurchaseLedger } from '../src/purchase-ledger.js';
 import { clientScript } from '../src/optional-tasks/funbox-app-redemption-ui.js';
 
@@ -13,7 +13,7 @@ const rows = [
 ];
 const response = (body, url, status=200) => ({ text:async()=>typeof body==='string'?body:JSON.stringify(body),json:async()=>body,url:()=>url,ok:()=>status>=200&&status<300,status:()=>status,headers:()=>({}),dispose:async()=>{} });
 
-async function harness(work,{timeout=false,acceptedAfterTimeout=false,wrongPrice=false,invalidFirst=false,stockZero=false,subtotal=495,shipping=60}={}) {
+async function harness(work,{timeout=false,acceptedAfterTimeout=false,wrongPrice=false,invalidFirst=false,stockZero=false,subtotal=495,shipping=60,taskRows=rows}={}) {
   const dir=await fs.mkdtemp(path.join(os.tmpdir(),'funbox-special-'));
   const names={bbpr07730:'【APP兌換】黃蜂要塞',bbpr07733:'【APP兌換】海怪扭擺',bbpr07736:'【APP兌換】雄鹿戰角'};
   const variants={bbpr07730:'10',bbpr07733:'11',bbpr07736:'12'};
@@ -53,7 +53,7 @@ async function harness(work,{timeout=false,acceptedAfterTimeout=false,wrongPrice
   const multi={adapters:{C:{activePurchaseHold:()=>null}},accountPurchaseTails:new Map(),accountIdentity:()=> 'synthetic-identity'};
   const clock={now:Date.parse(start)+1000};
   const task=await new FunboxAppRedemption({dataDir:dir,state,credentials,multi,apiFactory:async()=>api,now:()=>clock.now,coordinator:{_ledger:()=>ledger}}).init();
-  try{await task.configure({rows,startAt:start});task.data.enabled=true;task.data.accountIdentity='synthetic-identity';await work({task,state,ledger,events,orders,dir,api,clock,counts:()=>({postCount,addCount,removed})});}
+  try{await task.configure({rows:taskRows,startAt:start});task.data.continuousRetry=false;task.data.enabled=true;task.data.accountIdentity='synthetic-identity';await work({task,state,ledger,events,orders,dir,api,clock,counts:()=>({postCount,addCount,removed})});}
   finally{await task.close();await fs.rm(dir,{recursive:true,force:true});}
 }
 
@@ -180,4 +180,208 @@ test('持續重試：正式送單不明會持續自動查單，45分鐘後仍不
 });
 test('持續重試：未上架持續每秒核對，不隨失敗次數放慢到八秒',async()=>{
  await harness(async({task,api,clock})=>{task.data.continuousRetry=true;const get=api.get;api.get=async url=>url.endsWith('.json')?response({},url,404):get(url);for(let i=0;i<3;i++){await task.run();assert.equal(Date.parse(task.data.nextRetryAt)-clock.now,1000);clock.now+=1000;}assert.equal(task.data.enabled,true);});
+});
+
+test('塞站回歸：預熱後會員頁完全逾時，空車302不跟入慢會員頁，仍依序完成四張合成訂單',async()=>{
+ const four=[rows[0],rows[1],{productId:'bbpr07736',code:'AAAA-BBBB-0004'},{productId:'bbpr07736',code:'AAAA-BBBB-0005'}];
+ await harness(async({task,api,orders,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};
+  await task.preflight();const get=api.get;let slowMemberReads=0,emptyRedirects=0;
+  api.get=async(url,options)=>{
+   if(url===origin+'/account'||url===origin+'/account/index'){slowMemberReads++;throw new Error('Timeout 5000ms exceeded');}
+   const r=await get(url,options);
+   if(url===origin+'/cart'&&r.url()===origin+'/account/index'){
+    assert.equal(options.maxRedirects,0);emptyRedirects++;
+    return {...response('',url,302),headers:()=>({location:'/account/index'})};
+   }
+   return r;
+  };
+  await task.execute();assert.equal(slowMemberReads,0);assert.equal(emptyRedirects,4);
+  assert.deepEqual(orders.map(o=>o.productId),four.map(r=>r.productId));assert.deepEqual(counts(),{addCount:4,postCount:4,removed:0});
+ },{taskRows:four});
+});
+
+test('塞站回歸：外層逾時也只退避1至2秒，保留工作階段，不再固定等60秒',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;let contexts=0;
+  task.apiFactory=async()=>{if(++contexts<=2)throw new Error('Timeout 5000ms exceeded');return api;};
+  await task.execute();assert.equal(task.data.lastError.code,'timeout');assert.equal(Date.parse(task.data.nextRetryAt)-clock.now,1000);
+  clock.now+=1000;await task.execute();assert.equal(Date.parse(task.data.nextRetryAt)-clock.now,2000);
+  clock.now+=2000;await task.execute();assert.equal(counts().postCount,3);assert.equal(contexts,3);assert.equal(task.data.enabled,false);
+ });
+});
+
+test('塞站回歸：購物車逾時以5秒截止，後續只退避1秒；工作階段不重建',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;const get=api.get;let failures=0,contexts=0;
+  task.apiFactory=async()=>{contexts++;return api;};
+  api.get=async(url,options)=>{
+   if(url===origin+'/cart'&&failures++===0){assert.equal(options.timeout,5000);clock.now+=options.timeout;throw new Error('apiRequestContext.get: Timeout 5000ms exceeded.');}
+   return get(url,options);
+  };
+  await task.execute();assert.equal(task.data.jobs[0].error,'timeout');assert.equal(counts().addCount,0);
+  assert.equal(Date.parse(task.data.nextRetryAt)-clock.now,1000);
+  const failure=task.data.events.find(e=>e.requestPath==='GET /cart');assert.equal(failure.durationMs,5000);assert.equal(failure.code,'timeout');
+  clock.now+=1000;await task.execute();assert.equal(counts().postCount,3);assert.equal(contexts,1);
+ });
+});
+
+test('空車證據：過期預熱不得只憑302加車，必須重新確認登入',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;await task.preflight();clock.now+=120001;const get=api.get;let memberIndex=0;
+  api.get=async(url,options)=>{
+   if(url===origin+'/cart')return {...response('',url,302),headers:()=>({location:'/account/index'})};
+   if(url===origin+'/account/index'){memberIndex++;throw new Error('Timeout 5000ms exceeded');}
+   return get(url,options);
+  };
+  await task.execute();assert.equal(memberIndex,1);assert.equal(counts().addCount,0);assert.equal(task.data.enabled,true);
+  assert.equal(task.data.jobs[0].errorDetail.requestPath,'GET /account/index');
+ });
+});
+
+test('空車證據：登入導向不接受舊預熱證據，不會加入商品',async()=>{
+ await harness(async({task,api,counts})=>{
+  task.data.continuousRetry=true;await task.preflight();const get=api.get;
+  api.get=async(url,options)=>url===origin+'/cart'?{...response('',url,302),headers:()=>({location:'/account/login'})}
+   :url===origin+'/account'?response('<form>login</form>',origin+'/account/login'):get(url,options);
+  await task.execute();assert.equal(task.memberProof,null);assert.equal(counts().addCount,0);assert.equal(task.data.jobs[0].error,'login');
+ });
+});
+
+test('空車證據：保存的登入檔變動會丟棄舊工作階段與預熱證據',async()=>{
+ await harness(async({task,dir,api})=>{
+  const file=path.join(dir,'auto-purchase','funbox-account-c-session.json');await fs.mkdir(path.dirname(file),{recursive:true});
+  await fs.writeFile(file,'synthetic-state-1');let disposed=0;const second={...api};api.dispose=async()=>{disposed++;};
+  let calls=0;task.apiFactory=async()=>++calls===1?api:second;
+  await task.preflight();assert.equal(task.hasMemberProof(api),true);
+  await fs.writeFile(file,'synthetic-state-2');assert.equal(await task.context(),second);
+  assert.equal(disposed,1);assert.equal(task.memberProof,null);assert.equal(calls,2);
+ });
+});
+
+test('塞站回歸：加車已接受但回應遺失且補查逾時；恢復後即使公開售罄也接續原車',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};clock.now+=31000;const get=api.get,post=api.post;let added=false,failed=false,productReads=0;
+  api.post=async(url,options)=>{const r=await post(url,options);if(url===origin+'/cart/add'&&!added){added=true;throw new Error('Timeout 6000ms exceeded');}return r;};
+  api.get=async(url,options)=>{
+   if(url.endsWith('.json')){productReads++;if(added){const r=await get(url,options);const raw=await r.json();raw.variants[0].inventory_quantity=0;return response(raw,url);}}
+   if(url===origin+'/cart'&&added&&!failed){failed=true;throw new Error('Timeout 5000ms exceeded');}
+   return get(url,options);
+  };
+  await task.execute();assert.equal(counts().addCount,1);assert.equal(task.data.jobs[0].status,'cart_review');
+  clock.now=Date.parse(task.data.nextRetryAt);await task.execute();
+  assert.equal(counts().postCount,1);assert.equal(counts().addCount,1);
+  assert.deepEqual(task.data.jobs.map(j=>j.status),['ordered','skipped','skipped']);assert.equal(productReads,3);
+ });
+});
+
+test('塞站回歸：已折價後付款資料逾時，接續原車，不重查商品、不重套原券',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};const get=api.get,post=api.post;let failed=false,apply=0,lookup=0,productReads=0;
+  api.get=async(url,options)=>{if(url.endsWith('.json'))productReads++;if(url.endsWith('/shipping_rates_and_payment_method_items')&&!failed){failed=true;throw new Error('Timeout 5000ms exceeded');}return get(url,options);};
+  api.post=async(url,options)=>{if(url.endsWith('/apply_coupon'))apply++;if(url.endsWith('/coupons'))lookup++;return post(url,options);};
+  await task.execute();assert.equal(counts().addCount,1);assert.equal(apply,1);
+  clock.now=Date.parse(task.data.nextRetryAt);await task.execute();assert.equal(counts().postCount,3);assert.equal(productReads,3);assert.equal(apply,3);assert.equal(lookup,3);
+ });
+});
+
+test('庫存證據：null或缺少數量不可被Number轉成售罄，會持續重讀',async()=>{
+ for(const value of [null,undefined,'', 'unavailable'])await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;clock.now+=60000;const get=api.get;
+  api.get=async(url,options)=>{const r=await get(url,options);if(url.endsWith('.json')){const raw=await r.json();raw.variants[0].inventory_quantity=value;return response(raw,url);}return r;};
+  await task.execute();assert.equal(counts().addCount,0);assert.equal(task.data.jobs[0].status,'queued');assert.equal(task.data.jobs[0].error,'temporary');assert.equal(task.data.enabled,true);
+ });
+});
+
+test('限流證據：429及503保留120秒Retry-After，不被普通重試改成兩秒',async()=>{
+ for(const status of [429,503])await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;const get=api.get;let reads=0;
+  api.get=async(url,options)=>{if(url.endsWith('.json')){reads++;return {...response({},url,status),headers:()=>({'retry-after':'120'})};}return get(url,options);};
+  await task.execute();assert.equal(Date.parse(task.data.nextRetryAt),clock.now+120000);assert.equal(task.data.jobs[0].error,'cooldown');
+  await task.execute();assert.equal(reads,1);assert.equal(counts().addCount,0);
+ });
+});
+
+test('限流證據：未知送單查詢503後不再補查或重送，保留伺服器冷卻',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};const get=api.get;let lists=0;
+  api.get=async(url,options)=>url===origin+'/account/orders'&&++lists>1
+   ?{...response({},url,503),headers:()=>({'retry-after':'120'})}:get(url,options);
+  await task.execute();assert.equal(counts().postCount,1);assert.equal(task.data.jobs[0].status,'unknown');assert.equal(lists,2);
+  assert.equal(Date.parse(task.data.nextRetryAt),clock.now+120000);await task.execute();assert.equal(counts().postCount,1);assert.equal(lists,2);
+ },{timeout:true});
+});
+
+test('錯誤紀錄：保留端點與耗時，不能包含序號、token、Cookie或例外附帶的請求內容',async()=>{
+ await harness(async({task,api,clock})=>{
+  const url=origin+'/carts/'+'a'.repeat(32)+'/coupons';api.post=async()=>{clock.now+=6000;throw new Error('Timeout 6000ms exceeded '+rows[0].code+' Cookie: secret\nCall log: private');};
+  await assert.rejects(()=>task.checked(api,'post',url,{},task.data.jobs[0]),e=>e.code==='timeout');
+  const event=task.data.events.at(-1);assert.equal(event.requestPath,'POST /carts/<token>/coupons');assert.equal(event.durationMs,6000);
+  const text=JSON.stringify(task.status());assert.equal(text.includes(rows[0].code),false);assert.equal(text.includes('a'.repeat(32)),false);assert.equal(text.includes('Cookie:'),false);
+  assert.equal(redemptionFailure(new SyntaxError('bad JSON '+rows[0].code)).code,'invalid_response');
+ });
+});
+
+test('修復部署：已結束的舊批次重啟後保持停用，不因新版預設重試而重送',async()=>{
+ await harness(async({task,state,counts})=>{
+  task.data.continuousRetry=true;task.data.enabled=false;task.data.reserved=true;
+  task.data.jobs.forEach(j=>{j.status='skipped';j.error='sold_out';});await task.save();
+  const encrypted=await fs.readFile(path.join(task.directory,'queue.enc.json'));
+  const restarted=await new FunboxAppRedemption({dataDir:task.dataDir,state,credentials:task.credentials,multi:task.multi,apiFactory:async()=>{throw new Error('No network allowed')}}).init();
+  try{assert.equal(restarted.data.enabled,false);assert.equal(restarted.isReserved('C'),true);assert.ok(restarted.data.jobs.every(j=>j.status==='skipped'));assert.deepEqual(await fs.readFile(path.join(task.directory,'queue.enc.json')),encrypted);assert.equal(counts().postCount,0);}finally{await restarted.close();}
+ });
+});
+
+test('慢站期限：同一端點逾時後從5秒放寬至8、11、12秒，成功即恢復5秒',async()=>{
+ await harness(async({task,api,clock})=>{
+  const seen=[];let attempts=0;api.get=async(url,options)=>{
+   seen.push(options.timeout);if(attempts++<4){clock.now+=options.timeout;throw new Error('Timeout '+options.timeout+'ms exceeded');}return response({},url);
+  };
+  for(let i=0;i<4;i++)await assert.rejects(()=>task.checked(api,'get',origin+'/products/bbpr07730.json',{},task.data.jobs[0]));
+  await task.checked(api,'get',origin+'/products/bbpr07730.json',{},task.data.jobs[0]);
+  await task.checked(api,'get',origin+'/products/bbpr07730.json',{},task.data.jobs[0]);
+  assert.deepEqual(seen,[5000,8000,11000,12000,12000,5000]);
+ });
+});
+
+test('回應釋放：JSON格式錯誤也會釋放內容，工作階段長期重試不累積錯誤頁',async()=>{
+ await harness(async({task,api})=>{
+  task.data.continuousRetry=true;let disposed=0;
+  api.get=async url=>({...response({},url),json:async()=>{throw new SyntaxError('synthetic bad JSON');},dispose:async()=>{disposed++;}});
+  await task.execute();assert.equal(disposed,1);assert.equal(task.data.jobs[0].error,'invalid_response');assert.equal(task.data.enabled,true);
+ });
+});
+
+test('預熱恢復：開賣前會員讀取失敗後會安排重試，距開賣太近不再插入會員頁',async()=>{
+ await harness(async({task,clock})=>{
+  task.data.continuousRetry=true;clock.now=Date.parse(start)-60000;
+  task.preflight=async()=>{throw new Error('Timeout 5000ms exceeded');};
+  await task.warm();assert.ok(task.warmTimer);clearTimeout(task.warmTimer);task.warmTimer=null;
+  clock.now=Date.parse(start)-13000;await task.warm();assert.equal(task.warmTimer,null);
+ });
+});
+
+test('預設重試：新批次保存後預設持續重試，不必另用改時間端點開啟',async()=>{
+ await harness(async({task})=>{await task.stop();await task.configure({rows,startAt:start});assert.equal(task.data.continuousRetry,true);});
+});
+
+test('紅利核對：官網重算曾帶入紅利，必須歸零並重讀才送單，不重複歸零',async()=>{
+ await harness(async({task,api,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};const get=api.get,post=api.post;let cleared=false,resets=0;
+  api.get=async(url,options)=>{const r=await get(url,options);if(/^\/carts\/[a-z0-9]{32}$/.test(new URL(url).pathname)&&!cleared){let html=await r.text();if(html.includes('"coupon_discount":999504')){html=html.replace('"bonus_consumed":0','"bonus_consumed":1').replace('"bonus_discount":0','"bonus_discount":1');return response(html,r.url());}}return r;};
+  api.post=async(url,options)=>{if(url.endsWith('/apply_bonus')){resets++;cleared=true;}return post(url,options);};
+  await task.execute();assert.equal(resets,1);assert.equal(counts().postCount,3);
+ });
+});
+
+test('帳號隔離：C身分變動時未知任務不查認其他帳號訂單、不重送',async()=>{
+ await harness(async({task,counts})=>{
+  task.data.continuousRetry=true;task.data.jobs[0].status='unknown';task.data.jobs[0].intent={total:555};
+  task.multi.accountIdentity=()=> 'another-identity';let requests=0;task.apiFactory=async()=>{requests++;throw new Error('must not request');};
+  await task.execute();assert.equal(requests,0);assert.equal(task.data.lastError.code,'identity');assert.equal(task.data.jobs[0].status,'unknown');assert.equal(counts().postCount,0);
+ });
+});
+
+test('通知隔離：上架通知回呼同步拋錯也不阻擋既有兌換流程',async()=>{
+ await harness(async({task,counts})=>{task.onProduct=()=>{throw new Error('synthetic notification failure');};await task.execute();assert.equal(counts().postCount,3);});
 });

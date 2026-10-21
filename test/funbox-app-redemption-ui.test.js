@@ -13,7 +13,7 @@ async function fixture(work) {
     page.on('pageerror',e=>errors.push(e.message));
     await page.route('**/*',async route=>{
       const request=route.request(),url=new URL(request.url());
-      if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div class="funbox-purchase-panel"><table><tr id="funbox-sheet-account-C"><td id="funbox-sheet-actions-C"></td></tr></table></div>'});
+      if(url.pathname==='/')return route.fulfill({contentType:'text/html',body:'<div class="funbox-purchase-panel"><table><tr id="funbox-sheet-account-C"><td id="funbox-sheet-api-C"></td><td id="funbox-sheet-actions-C"></td></tr></table></div>'});
       const action=url.pathname.split('/').at(-1); const body=request.method()==='POST'?request.postDataJSON():{}; calls.push({action,body});
       if(action==='save') {
         if(body.rows.some(r=>!/^\w{4}-\w{4}-\w{4}$/.test(r.code)))return route.fulfill({status:400,json:{error:'序號格式應為四碼－四碼－四碼'}});
@@ -27,7 +27,7 @@ async function fixture(work) {
     await page.addInitScript(()=>{window.confirm=()=>{throw new Error('native confirmation unavailable');};});
     await page.goto('http://127.0.0.1:3210/'); await page.addScriptTag({content:clientScript});
     await page.getByRole('button',{name:'特別',exact:true}).click();
-    await work({page,calls}); assert.deepEqual(errors,[]);
+    await work({page,calls,setState:value=>{state={...state,...value};}}); assert.deepEqual(errors,[]);
   }finally{await browser.close();}
 }
 
@@ -63,5 +63,17 @@ test('特別任務介面：10:00:05秒數經儲存與重新開啟仍保留',{tim
   await page.waitForFunction(()=>document.querySelector('[data-arm-reason]')?.textContent.includes('已儲存，可啟用'));
   assert.equal(calls.find(c=>c.action==='save').body.startAt,'2026-10-21T10:00:05+08:00');
   await page.locator('[data-close]').click();await page.getByRole('button',{name:'特別',exact:true}).click();assert.equal(await page.locator('[data-time]').inputValue(),'2026-10-21T10:00:05');
+ });
+});
+
+test('特別任務介面：開賣後顯示自動重試倒數與實際逾時端點、耗時，不誤顯示等待10點',{timeout:20000},async()=>{
+ await fixture(async({page,setState})=>{
+  setState({enabled:true,reserved:true,startAt:'2020-01-01T02:00:00Z',nextRetryAt:new Date(Date.now()+60000).toISOString(),
+   events:[{at:new Date().toISOString(),label:'GET /cart 失敗',durationMs:5000,reason:'官方請求逾時',retryAt:new Date(Date.now()+60000).toISOString()}],
+   jobs:[{id:'one',productId:'bbpr07730',status:'cart_review',codeSaved:true,error:'timeout',errorDetail:{reason:'官方請求逾時'}}]});
+  await page.waitForFunction(()=>document.querySelector('#funbox-sheet-api-C').textContent.includes('秒後自動重試'));
+  const logs=await page.locator('[data-logs]').textContent();assert.match(logs,/GET \/cart 失敗/);assert.match(logs,/5000ms/);assert.match(logs,/官方請求逾時/);assert.match(logs,/下次/);
+  assert.match(await page.locator('.funbox-special-job small').textContent(),/官方請求逾時/);
+  assert.doesNotMatch(await page.locator('#funbox-sheet-api-C').textContent(),/等待 10:00|待核對/);
  });
 });
