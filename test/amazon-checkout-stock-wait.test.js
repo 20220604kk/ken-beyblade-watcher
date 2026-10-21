@@ -60,6 +60,9 @@ test('status exposes only stock-wait summary, never private checkout URL, flow t
   m.storage().checkoutStockWait = { asin, url: origin + '/checkout/p/PRIVATEFLOW/spc?token=SECRET', snapshot: { private: 'VALUE' }, since: '2026-10-21', refreshCount: 7 };
   const status = m.status(); assert.equal(status.checkoutStockWait.active, true); assert.equal(status.checkoutStockWait.refreshCount, 7);
   assert.doesNotMatch(JSON.stringify(status), /PRIVATEFLOW|SECRET|VALUE/);
+  assert.equal(status.checkoutStockWait.suspended, false);
+  m.storage().checkoutAccessIssue = { status: 'needs_login' };
+  assert.equal(m.status().checkoutStockWait.suspended, true, 'retained URL awaiting checkout auth is not a running refresh loop');
 });
 
 test('slow response adds no extra one-second idle wait', async () => {

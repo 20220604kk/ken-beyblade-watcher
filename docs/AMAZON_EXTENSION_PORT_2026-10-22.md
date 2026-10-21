@@ -44,11 +44,13 @@
 - `src/amazon-jp-http.js`：本輪報價與 AOD 快線、共用最終送單、紅字位置恢復。
 - `src/amazon-jp-product-order.js`、`amazon-pre-submit-retry.js`：正式接線、僅可恢復的送單前階段。
 - 背景瀏覽器入口、頁面就緒與既有前端橋同步支援預購；前端橋也使用 APEX 價格判斷。這不是以家用插件取代既有前端橋或搬移帳號。
-- `test/amazon-extension-port.test.js`：30 項合成測試，包含直購／預購、第三方主區的自營 AOD 補查、Smart Wagon／完整車、過期報價、Prime 三語與登入範圍、itemselect、防未知重送、SPC 紅字回流及重啟恢復、官方限流與回商品。
+- `test/amazon-extension-port.test.js`：31 項合成測試，包含直購／預購、第三方主區的自營 AOD 補查、Smart Wagon／完整車、過期報價、Prime 三語與登入範圍、itemselect、防未知重送、SPC 頁框及純 JSON 續行、紅字回流及重啟恢復、官方限流與回商品。
 - 原登入範圍測試補上「沒有 AOD 報價」的合成回應，避免新增補查被測試誤認為未知網路請求；保留原登入隔離斷言。
 
 驗收入口：`npm run handoff:phase1`（語法、完整離線測試、隔離控制台、發佈內容稽核）。另執行 `node scripts/audit-distribution.mjs --private-root .`。收據 `artifacts/handoff/phase1.json` 綁定本機與最終 commit；部署／現場唯讀結果在忽略的 `artifacts/handoff/amazon-extension-*.json`。
 
 正式重載需等交易／互動視窗空檔，先保存原設定與狀態，官方暫停後再重啟，恢復原本開關；不得重設成功數、移除未決或清除原紅字位置。部署前觀測到 A 啟用、B/C 停用及舊紅字位置，僅是當下快照，下一位 AI 必須重查實際狀態。
+
+保留紅字位置遇到結帳登入待核對或任務已停用時，狀態標記 `suspended`，UI 顯示「保留紅字頁」；不得把保存位置冒充為仍在 250ms 刷新。A 在本次部署前另有舊結帳登入待核對，商品監控仍運作，不能藉移植程式直接清除這項驗證狀態。
 
 本次不建立真實測試訂單、不發測試通知、不刪真實購物車。尚未以真實新品競購驗證新路徑的成功率或 250ms 實際吞吐；合成測試與網站即時可用性必須分開解讀。

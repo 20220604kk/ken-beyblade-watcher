@@ -774,7 +774,8 @@ export class AmazonJpHttpClient {
         throw fail('結帳續行意外出現完成頁，保留查單，不重試', 'AMAZON_UNEXPECTED_COMPLETION');
       }
       // Stock pages belong to the retained GET loop, never Continue/qty-zero.
-      if (amazonCheckoutStockState(page, '') !== 'other' || page.$('#spc-form').length) return page;
+      const hasItems = page.$('[id^="item-block-product-title-"],[id^="checkout-item-block-item-primary-title-"],.lineitem-title-text').length;
+      if (amazonCheckoutStockState(page, '') !== 'other' || page.$('#spc-form').length && hasItems) return page;
       const decline = amazonPrimeDecline(page, amazonHttpForm);
       const selection = tx ? amazonItemSelection(page, tx.asin, amazonHttpForm) : null;
       const render = decline || selection ? null : amazonCheckoutRenderUrl(page);

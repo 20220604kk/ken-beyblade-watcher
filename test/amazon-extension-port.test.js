@@ -163,8 +163,19 @@ test('persisted AOD red flow resumes GET without product/AOD/add replay', async 
 
 test('returned canonical URLs use structured evidence only, ambiguity and final endpoint are rejected', () => {
   assert.equal(amazonCheckoutRenderUrl(doc('<script type="application/json">{"redirectUrl":"/checkout/p/fixture/spc"}</script>')), origin + '/checkout/p/fixture/spc');
+  assert.equal(amazonCheckoutRenderUrl(doc('{"checkoutUrl":"/checkout/p/fixture/spc"}')), origin + '/checkout/p/fixture/spc');
   assert.equal(amazonCheckoutRenderUrl(doc('<form action="/checkout/p/fixture/spc/place-order"></form>')), origin + '/checkout/p/fixture/spc');
   for (const html of ['<script>location="/checkout/p/fixture/spc"</script>', '<a href="/checkout/p/fixture/spc/place-order">Go</a>', '<a href="/checkout/p/fixture/spc">A</a><a href="/checkout/p/other/spc">B</a>']) assert.equal(amazonCheckoutRenderUrl(doc(html)), null);
+});
+
+test('thin SPC form shell reads its own canonical checkout, while complete review incurs no additional GET', async () => {
+  for (const checkout of ['<form id="spc-form" action="/checkout/p/fixture/spc/place-order"></form>', '{"checkoutUrl":"/checkout/p/fixture/spc"}']) {
+    const f = clientFixture({ main: product(), checkout });
+    assert.equal((await f.run()).status, 'ordered');
+    assert.equal(f.calls.filter(c => c.path === '/checkout/p/fixture/spc').length, 1);
+  }
+  const complete = clientFixture({ main: product() }); await complete.run();
+  assert.equal(complete.calls.filter(c => c.path === '/checkout/p/fixture/spc').length, 0);
 });
 
 const selection = (quantity = 1) => `<section id="item-block-1"><a href="/dp/${asin}">Item</a><span data-a-selector="inner-value">${quantity}</span><p>販売元: Amazon.co.jp</p></section>

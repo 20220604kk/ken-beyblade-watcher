@@ -65,6 +65,10 @@ export function amazonCheckoutRenderUrl(page) {
     const raw = $(n).text(); if (raw.length > 200_000) return;
     try { walk(JSON.parse(raw)); } catch { /* never execute returned scripts */ }
   });
+  const plain = $('body').text().trim();
+  if (plain.length <= 200_000 && /^[{[]/.test(plain)) {
+    try { walk(JSON.parse(plain)); } catch { /* only explicit structured redirect fields */ }
+  }
   return candidates.size === 1 ? [...candidates][0] : null;
 }
 
