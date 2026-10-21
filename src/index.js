@@ -2190,7 +2190,7 @@ function scheduleAmazonJp({ immediate = false, delayMs = null } = {}) {
         error.code === 'AMAZON_RATE_LIMITED' ? 60_000 : 0);
       runtime.amazonJpBackoffUntil = new Date(Date.now() + nextDelay).toISOString();
       log(
-        `日亞官方原價掃描失敗：${error.message}｜類別 ${error.code || 'AMAZON_SCAN_FAILED'}、頁面 ${error.requestKind || 'unknown'}｜第 ${runtime.amazonJpFailureCount} 次連續失敗，`
+        `日亞自營AOD掃描失敗：${error.message}｜類別 ${error.code || 'AMAZON_SCAN_FAILED'}、頁面 ${error.requestKind || 'unknown'}｜第 ${runtime.amazonJpFailureCount} 次連續失敗，`
         + `降速至 ${Math.ceil(nextDelay / 1000)} 秒後重試。`,
         'japan'
       );
@@ -2410,8 +2410,8 @@ async function runAmazonJpNotificationTest(body = {}) {
     channelMode: 'discord',
     discordAudience: 'japan'
   });
-  log(`日亞官方原價 ${product.code} 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
-  return { message: `日亞官方原價 ${product.code} 測試通知已送到日本拍賣 Discord。`, messageId: messageId || '', product };
+  log(`日亞自營AOD ${product.code} 測試通知已送出${messageId ? `｜回覆 ID：${messageId}` : ''}`, 'japan');
+  return { message: `日亞自營AOD ${product.code} 測試通知已送到日本拍賣 Discord。`, messageId: messageId || '', product };
 }
 
 async function runLiveFunboxProductNotificationTest() {
@@ -3646,8 +3646,8 @@ const dashboard = createDashboard({
       runtime.amazonJpBackoffUntil = null;
       await amazonJapanMonitor.close();
     }
-    log(`日亞官方原價監控已${config.amazonJp.enabled ? '啟用' : '暫停'}：線性浮動 15～20 秒，限流至少 60 秒並遵守 Retry-After｜日本郵遞區號 ${config.amazonJp.postalCode}。`, 'japan');
-    return { message: config.amazonJp.enabled ? '日亞官方原價監控已儲存並立即檢查。' : '日亞官方原價監控已暫停；其他監控不受影響。' };
+    log(`日亞自營AOD監控已${config.amazonJp.enabled ? '啟用' : '暫停'}：線性浮動 15～20 秒，限流至少 60 秒並遵守 Retry-After｜日本郵遞區號 ${config.amazonJp.postalCode}。`, 'japan');
+    return { message: config.amazonJp.enabled ? '日亞自營AOD監控已儲存並立即檢查。' : '日亞自營AOD監控已暫停；其他監控不受影響。' };
   },
   onAddAmazonJpProduct: async (body) => {
     const product = await amazonJapanMonitor.addManualProduct(body.url);
@@ -4220,8 +4220,8 @@ if (config.shoppingSites.enabled) scheduleShopping({ immediate: true });
 log(config.japanAuctions.enabled ? '日本拍賣監控已啟動。' : '日本拍賣監控目前停止。', 'japan');
 if (config.japanAuctions.enabled) scheduleJapan({ immediate: true });
 log(config.amazonJp.enabled
-  ? 'Amazon.co.jp 官方原價監控已啟動；採日本配送環境、官方定價與賣家 ID 三重核對。'
-  : 'Amazon.co.jp 官方原價監控目前停止。', 'japan');
+  ? 'Amazon.co.jp 自營 AOD 監控已啟動；採日本配送環境與 AOD 全新自營報價核對，不依賴 TT 定價。'
+  : 'Amazon.co.jp 自營 AOD 監控目前停止。', 'japan');
 if (config.amazonJp.enabled) scheduleAmazonJp({ immediate: true });
 for (const amazonJpProductOrder of amazonJpProductOrders) {
   log(config.amazonJpProductOrders[amazonJpProductOrder.slot].enabled

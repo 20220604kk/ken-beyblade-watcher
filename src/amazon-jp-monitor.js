@@ -265,15 +265,13 @@ export function matchTakaraTomyCatalog(product, catalog) {
 }
 
 export function amazonJapanNotification(product, { kind = 'restock', xConfirmed = false, test = false } = {}) {
-  const status = kind === 'new' ? '新品可購' : '官方原價恢復販售';
+  const status = kind === 'new' ? '新品可購' : '自營恢復販售';
   const crossCheck = xConfirmed
-    ? 'TAKARA TOMY 定價＋Amazon.co.jp 賣家＋X @bey_sokuhou'
-    : 'TAKARA TOMY 定價＋Amazon.co.jp 賣家';
+    ? 'Amazon.co.jp 自營 AOD 報價＋X @bey_sokuhou'
+    : 'Amazon.co.jp 自營 AOD 報價';
   const prefix = test ? '🧪 測試｜' : '';
   const priceTwd = approximateTwdFromYen(`¥${product.priceYen}`);
-  const msrpTwd = approximateTwdFromYen(`¥${product.msrpYen}`);
   const priceText = `¥${Number(product.priceYen).toLocaleString('en-US')}${priceTwd === null ? '' : `（約 NT$${priceTwd.toLocaleString('en-US')}）`}`;
-  const msrpText = `¥${Number(product.msrpYen).toLocaleString('en-US')}${msrpTwd === null ? '' : `（約 NT$${msrpTwd.toLocaleString('en-US')}）`}`;
   return {
     text: `${prefix}🇯🇵 日亞｜${status}｜${product.code} ${product.title}`,
     options: {
@@ -288,7 +286,7 @@ export function amazonJapanNotification(product, { kind = 'restock', xConfirmed 
           `商品：${product.title}`,
           `型號：${product.code}`,
           `日亞價格：${priceText}`,
-          `官方定價：${msrpText}${test && product.testPriceSource === 'custom' ? '（自訂測試資料）' : ''}`,
+          '價格依據：Amazon.co.jp 自營報價（不對照 TT 定價）',
           test ? '販售者：Amazon.co.jp（測試情境；未即時核對）' : '販售者：Amazon.co.jp（賣家 ID 已核對）',
           `交叉驗證：${crossCheck}${test ? '（測試模擬，未即時核對）' : ''}`,
           '',
@@ -296,7 +294,7 @@ export function amazonJapanNotification(product, { kind = 'restock', xConfirmed 
         ].join('\n'),
         color: 0xff9900,
         thumbnail: product.imageUrl ? { url: product.imageUrl } : undefined,
-        footer: { text: `${test ? '本機測試・不是真實補貨｜' : ''}只通知官方定價以下・第三方溢價不通知` },
+        footer: { text: `${test ? '本機測試・不是真實補貨｜' : ''}只通知全新 Amazon.co.jp 自營・第三方販售不通知` },
         timestamp: new Date().toISOString()
       }]
     }
@@ -331,7 +329,7 @@ export function amazonJapanTestNotification(selection = {}, savedProducts = []) 
   if (!title) throw new Error('請填入自訂測試商品名稱');
   if (!code) throw new Error('請填入有效型號，例如 BX-52');
   if (!Number.isSafeInteger(msrpYen) || msrpYen < 1 || msrpYen > 1_000_000) {
-    throw new Error('請填入有效的日圓官方定價');
+    throw new Error('請填入有效的日圓測試參考報價');
   }
   if (!Number.isSafeInteger(priceYen) || priceYen < 1 || priceYen > msrpYen) {
     throw new Error('模擬日亞價格須為正整數且不高於測試使用定價');
@@ -542,7 +540,7 @@ export class AmazonJapanMonitor {
   recordReadDiagnostic({ url, status, transport, issue = '', retryAfterMs = 0 }) {
     const lane = this.operations.getStore()?.lane || 'all';
     const diagnostic = { at: new Date().toISOString(), lane, kind: new URL(url).pathname === '/' ? 'location' : new URL(url).pathname === '/s' ? 'search'
-      : /\/dp\/|\/gp\/product\//.test(new URL(url).pathname) ? 'product' : 'brand',
+      : /aodAjaxMain/.test(url) ? 'aod' : /\/dp\/|\/gp\/product\//.test(new URL(url).pathname) ? 'product' : 'brand',
       httpStatus: Number(status) || 0, transport, issue, retryAfterMs };
     this.storage().recentReads = [...(this.storage().recentReads || []), diagnostic].slice(-40);
     this.storage()[lane === 'background' ? 'lastBackgroundDiagnostic' : 'lastSearchDiagnostic'] = diagnostic;
@@ -620,51 +618,6 @@ export class AmazonJapanMonitor {
       { httpStatus: response?.status(), retryAfterMs });
     if (html.length < 1000) throw new Error('Amazon.co.jp 回傳不完整頁面，本輪不更新基線');
     return html;
-  }
-
-  async refreshCatalog(storage, force = false) {
-    const maxAge = Number(this.getConfig()?.catalogRefreshMinutes || 360) * 60_000;
-    if (!force && storage.catalog.length && Date.now() - Date.parse(storage.catalogCheckedAt || '') < maxAge) return storage.catalog;
-    const response = await this.fetcher(TAKARA_TOMY_LINEUP_URL, {
-      headers: { 'User-Agent': 'Mozilla/5.0', Accept: 'text/html,application/xhtml+xml' },
-      signal: AbortSignal.timeout(30_000)
-    });
-    if (!response.ok) throw new Error(`TAKARA TOMY 定價表回傳 HTTP ${response.status}`);
-    const catalog = parseTakaraTomyLineup(await response.text());
-    if (catalog.length < 50) throw new Error(`TAKARA TOMY 定價表只讀到 ${catalog.length} 件，拒絕覆蓋既有基線`);
-    storage.catalog = catalog;
-    storage.catalogCheckedAt = new Date().toISOString();
-    return catalog;
-  }
-
-  async refreshBrandProducts(storage, force = false) {
-    const config = this.getConfig();
-    const maxAge = Number(config.brandRefreshMinutes || 360) * 60_000;
-    if (!force && Object.keys(storage.brandProducts || {}).length && Date.now() - Date.parse(storage.brandCheckedAt || '') < maxAge) {
-      return storage.brandProducts;
-    }
-    const snapshot = new Map();
-    for (const url of config.storePages || []) {
-      for (const product of parseAmazonStoreAsins(await this.loadPage(url), url)) {
-        if (!extractModelCode(product.title) || !/BEYBLADE|ベイブレード/i.test(product.title)) continue;
-        const old = snapshot.get(product.asin);
-        snapshot.set(product.asin, { ...old, ...product, sourcePages: [...new Set([...(old?.sourcePages || []), url])] });
-      }
-    }
-    if (!snapshot.size) throw new Error('TAKARA TOMY 日亞品牌頁沒有讀到 ASIN，本輪不更新基線');
-    const registry = new Map(Object.entries(storage.brandProducts || {}));
-    for (const [asin, product] of snapshot) {
-      const old = registry.get(asin);
-      registry.set(asin, {
-        ...old,
-        ...product,
-        sourcePages: [...new Set([...(old?.sourcePages || []), ...(product.sourcePages || [])])]
-      });
-    }
-    storage.lastBrandSnapshotCount = snapshot.size;
-    storage.brandProducts = Object.fromEntries(registry);
-    storage.brandCheckedAt = new Date().toISOString();
-    return storage.brandProducts;
   }
 
   async addXSignal(value, { source = 'bey_sokuhou', title = '' } = {}) {
@@ -777,40 +730,43 @@ export class AmazonJapanMonitor {
     this.migrateXSignalsToManualProducts(storage);
   }
 
-  async verifyOffer(product, catalogItem) {
-    const offer = parseAmazonOffer(await this.loadPage(canonicalAmazonJapanUrl(product.asin)), product.asin);
-    const priceYen = offer.priceYen || product.priceYen;
-    const withinMsrp = isAmazonPriceWithinMsrp(
-      priceYen,
-      catalogItem.msrpYen,
-      this.getConfig()?.priceToleranceYen
-    );
-    return {
-      ...product,
-      ...offer,
-      title: offer.title || product.title,
-      code: offer.code || product.code,
-      imageUrl: offer.imageUrl || product.imageUrl || '',
-      priceYen,
-      msrpYen: catalogItem.msrpYen,
-      officialName: catalogItem.name,
-      officialUrl: catalogItem.officialUrl,
-      url: canonicalAmazonJapanUrl(product.asin),
-      available: offer.available && withinMsrp,
-      rejectionReason: !offer.sellerConfirmed
-        ? '賣家不是 Amazon.co.jp'
-        : !offer.available
-          ? 'Amazon.co.jp 官方賣家目前不可購'
-          : !withinMsrp
-            ? `價格 ¥${priceYen} 高於官方定價 ¥${catalogItem.msrpYen}`
-            : ''
+  async loadAodOffer(asin) {
+    const { AmazonJpHttpClient, amazonAodUrl } = await import('./amazon-jp-http.js');
+    const url = amazonAodUrl(asin), lane = this.operations.getStore()?.lane || 'all';
+    const generation = this.operations.getStore()?.generation ?? this.generation;
+    const read = async () => {
+      const page = await this.browserPage();
+      await this.ensureJapanLocation(page);
+      const context = await this.ensureContext();
+      const client = new AmazonJpHttpClient({ request: context.request });
+      try {
+        const snapshot = await client.readOffer(asin);
+        if (snapshot.pageIssue || ['retail_contract_incomplete', 'retail_price_unreadable'].includes(snapshot.diagnostic?.decision)) {
+          throw Object.assign(new Error('AOD 回應不完整，保留原有庫存狀態'), { code: 'AMAZON_PRODUCT_UNREADABLE', httpStatus: 200 });
+        }
+        this.recordReadDiagnostic({ url, status: 200, transport: 'aod_http' });
+        return { ...snapshot, available: snapshot.sellerConfirmed && snapshot.addCartAvailable && snapshot.priceYen > 0,
+          buyButtonPresent: snapshot.addCartAvailable, pricingSource: 'amazon_retail_aod', msrpYen: null };
+      } catch (error) {
+        this.recordReadDiagnostic({ url, status: error.httpStatus, transport: 'aod_http', issue: error.code, retryAfterMs: error.retryAfterMs || 0 });
+        error.requestKind = 'aod'; throw error;
+      }
     };
+    return this.readScheduler ? this.readScheduler.run({ lane: lane === 'background' ? 'background' : 'confirmation',
+      scope: 'general-monitor', key: url, canStart: () => !this.closed && generation === this.generation && this.getConfig()?.enabled !== false }, read) : read();
+  }
+
+  async verifyOffer(product) {
+    const offer = await this.loadAodOffer(product.asin);
+    return { ...product, ...offer, title: offer.title || product.title, code: offer.code || product.code,
+      imageUrl: offer.imageUrl || product.imageUrl || '', url: canonicalAmazonJapanUrl(product.asin),
+      msrpYen: null, officialName: '', officialUrl: '', pricingSource: 'amazon_retail_aod',
+      rejectionReason: offer.available ? '' : 'AOD 目前沒有可確認的全新 Amazon.co.jp 自營可購報價' };
   }
 
   async inspectDedicatedPreCatalogProducts(products, officialCatalog, pricingCatalog, storage, onObserved = () => {}) {
     const pending = products.filter((product) => (
       product.dedicatedUntilCatalog === true
-      && !matchTakaraTomyCatalog(product, officialCatalog)
     ));
     const previous = storage.preCatalogWatch || {};
     const current = {};
@@ -819,14 +775,8 @@ export class AmazonJapanMonitor {
     for (const product of pending) {
       const checkedAt = new Date().toISOString();
       try {
-        const catalogItem = matchTakaraTomyCatalog(product, pricingCatalog);
-        const offer = catalogItem
-          ? await this.verifyOffer(product, catalogItem)
-          : parseAmazonOffer(await this.loadPage(canonicalAmazonJapanUrl(product.asin)), product.asin);
-        if (catalogItem) {
-          observed.push(offer);
-          onObserved(offer);
-        }
+        const offer = await this.verifyOffer(product);
+        observed.push(offer); onObserved(offer);
         current[product.asin] = {
           ...previous[product.asin],
           ...offer,
@@ -836,11 +786,11 @@ export class AmazonJapanMonitor {
           url: canonicalAmazonJapanUrl(product.asin),
           imageUrl: offer.imageUrl || previous[product.asin]?.imageUrl || '',
           priceYen: offer.priceYen || null,
-          msrpYen: catalogItem?.msrpYen || null,
-          pricingSource: catalogItem?.pricingSource || '',
+          msrpYen: null,
+          pricingSource: 'amazon_retail_aod',
           sellerConfirmed: Boolean(offer.sellerConfirmed),
           buyButtonPresent: Boolean(offer.buyButtonPresent),
-          available: Boolean(catalogItem && offer.available),
+          available: Boolean(offer.available),
           lastCheckedAt: checkedAt,
           lastError: ''
         };
@@ -924,7 +874,7 @@ export class AmazonJapanMonitor {
       // Handoff immediately, before another product read, a Discord request,
       // or a debounced state save. Never await checkout in the monitoring lane.
       try {
-        void Promise.resolve(this.onAvailabilitySignal({ ...product }, { source: '日亞官方原價', kind }))
+        void Promise.resolve(this.onAvailabilitySignal({ ...product }, { source: '日亞自營AOD', kind }))
           .catch((error) => this.log(`日亞購買訊號交付失敗（監控繼續）：${error.message}`));
       } catch (error) {
         this.log(`日亞購買訊號交付失敗（監控繼續）：${error.message}`);
@@ -932,9 +882,11 @@ export class AmazonJapanMonitor {
     };
     try {
       await this.ensureSeedSignals();
-      const catalog = lane === 'search' && storage.catalog.length && !forceCatalog
-        ? storage.catalog : await this.refreshCatalog(storage, forceCatalog);
-      const brandProducts = lane === 'search' ? storage.brandProducts : await this.refreshBrandProducts(storage, forceCatalog);
+      // Historical TT/brand snapshots remain intact but are never refreshed or
+      // used as a price gate. Seller search discovers ASINs; AOD confirms offers.
+      const catalog = [];
+      const brandProducts = storage.brandProducts || {};
+      storage.pricingPolicy = 'amazon_retail_aod';
       const normalizeKnownProduct = (product, source) => {
         const asin = clean(product?.asin || extractAmazonAsin(product?.url)).toUpperCase();
         const title = clean(product?.title || product?.name);
@@ -963,21 +915,7 @@ export class AmazonJapanMonitor {
         if (usableKnownProduct(normalized)) watchRegistry.set(normalized.asin, normalized);
       }
       const configuredWatch = [...watchRegistry.values()];
-      const manualPricing = configuredWatch
-        .filter((product) => (
-          Number.isInteger(Number(product.manualMsrpYen))
-          && Number(product.manualMsrpYen) > 0
-          && !catalog.some((item) => item.code === product.code)
-        ))
-        .map((product) => ({
-          code: product.code,
-          name: product.title,
-          normalizedName: normalizeName(product.title),
-          msrpYen: Number(product.manualMsrpYen),
-          officialUrl: '',
-          pricingSource: 'manual_pre_catalog'
-        }));
-      const pricingCatalog = [...catalog, ...manualPricing];
+      const pricingCatalog = [];
       const delegated = lane === 'background' ? this.getDelegatedAsins() : new Set();
       const dedicated = lane === 'search' ? { pending: [], successful: 0, observed: [] } : await this.inspectDedicatedPreCatalogProducts(
         configuredWatch.filter(product => !delegated.has(product.asin)),
@@ -1024,46 +962,13 @@ export class AmazonJapanMonitor {
       }));
       for (const product of candidateRows) {
         if (dedicatedPendingAsins.has(product.asin)) continue;
-        const catalogItem = matchTakaraTomyCatalog(product, pricingCatalog);
-        if (!catalogItem) {
-          rejected.push({ ...product, rejectionReason: '無法唯一對應 TAKARA TOMY 官方型號與定價' });
-          continue;
-        }
-        const base = {
-          ...product,
-          msrpYen: catalogItem.msrpYen,
-          officialName: catalogItem.name,
-          officialUrl: catalogItem.officialUrl,
-          url: canonicalAmazonJapanUrl(product.asin)
-        };
-        let verified;
-        if (!product.available || !isAmazonPriceWithinMsrp(product.priceYen, catalogItem.msrpYen, this.getConfig()?.priceToleranceYen)) {
-          verified = {
-            ...base,
-            available: false,
-            rejectionReason: !product.available
-              ? 'Amazon.co.jp 官方賣家搜尋目前不可購'
-              : `價格 ¥${product.priceYen} 高於官方定價 ¥${catalogItem.msrpYen}`
-          };
-        } else if (discoveryUpgrade || (previous[product.asin]?.available
-          && Number(previous[product.asin]?.priceYen) === Number(product.priceYen))) {
-          // On the one-time coverage upgrade, absorb the full seller-filtered
-          // search as a quiet baseline.  For an unchanged known offer, the
-          // search page is sufficient; only a new/restocked/price-changed item
-          // pays the cost of loading its product page again.
-          verified = {
-            ...previous[product.asin],
-            ...base,
-            available: true,
-            sellerConfirmed: Boolean(previous[product.asin]?.sellerConfirmed),
-            discoverySource: 'amazon_seller_search'
-          };
-        } else {
-          verified = {
-            ...await this.verifyOffer(product, catalogItem),
-            lastOfferCheckedAt: new Date().toISOString()
-          };
-        }
+        const old = previous[product.asin];
+        const cached = old?.pricingSource === 'amazon_retail_aod' && old.available && product.available
+          && Number(old.priceYen) === Number(product.priceYen)
+          && Date.now() - Date.parse(old.lastOfferCheckedAt || '') < 30_000;
+        // Search never creates proof of stock or refreshes an AOD timestamp.
+        const verified = cached ? { ...old, discoverySource: 'amazon_seller_search' }
+          : { ...await this.verifyOffer(product), lastOfferCheckedAt: new Date().toISOString() };
         observed.set(verified.asin, verified);
         observe(verified);
         if (storage.pendingDiscoveries?.[verified.asin]) {
@@ -1103,14 +1008,9 @@ export class AmazonJapanMonitor {
         .filter((product) => !searchAsins.has(product.asin) && !recentlySearched.has(product.asin) && !delegated.has(product.asin));
 
       for (const product of directRows) {
-        const catalogItem = matchTakaraTomyCatalog(product, pricingCatalog);
-        if (!catalogItem) {
-          rejected.push({ ...product, rejectionReason: '直接核對時無法唯一對應 TAKARA TOMY 官方型號與定價' });
-          continue;
-        }
         try {
           const verified = {
-            ...await this.verifyOffer(product, catalogItem),
+            ...await this.verifyOffer(product),
             discoverySource: product.discoverySource,
             lastOfferCheckedAt: new Date().toISOString()
           };
@@ -1119,7 +1019,7 @@ export class AmazonJapanMonitor {
           if (!verified.available) rejected.push(verified);
         } catch (error) {
           if (error?.code === 'AMAZON_RATE_LIMITED' || error?.code === 'AMAZON_LOADING_SHELL') throw error;
-          rejected.push({ ...product, rejectionReason: `商品頁直接核對失敗：${error.message}` });
+          rejected.push({ ...product, rejectionReason: `AOD 直接核對失敗：${error.message}` });
         }
       }
 
@@ -1156,7 +1056,7 @@ export class AmazonJapanMonitor {
       storage[lane === 'background' ? 'lastBackgroundErrorCode' : 'lastErrorCode'] = '';
       await this.state.save();
       const lastBrandSnapshotCount = storage.lastBrandSnapshotCount || Object.keys(brandProducts).length;
-      this.log(`日亞官方原價${lane === 'background' ? '背景複查' : ''}：官方定價 ${catalog.length} 件、定價前專線 ${dedicated.pending.length} 件（成功 ${dedicated.successful} 件）、品牌 ASIN 基線 ${Object.keys(brandProducts).length} 件（最近品牌頁 ${lastBrandSnapshotCount} 件）、Amazon.co.jp 搜尋 ${searchProducts.length} 件、搜尋候選 ${candidateRows.length} 件、一般直接核對 ${directRows.length} 件、單品任務分擔 ${delegated.size} 件、已知商品 ${Object.keys(current).length} 件、合格 ${eligible.length} 件、通知 ${notified} 則。`);
+      this.log(`日亞自營AOD${lane === 'background' ? '背景複查' : ''}：AOD 自營報價、優先直查 ${dedicated.pending.length} 件（成功 ${dedicated.successful} 件）、品牌 ASIN 基線 ${Object.keys(brandProducts).length} 件（最近品牌頁 ${lastBrandSnapshotCount} 件）、Amazon.co.jp 搜尋 ${searchProducts.length} 件、搜尋候選 ${candidateRows.length} 件、一般直接核對 ${directRows.length} 件、單品任務分擔 ${delegated.size} 件、已知商品 ${Object.keys(current).length} 件、合格 ${eligible.length} 件、通知 ${notified} 則。`);
       return {
         checkedAt,
         lane,
@@ -1232,7 +1132,8 @@ export class AmazonJapanMonitor {
       .map(enrichProduct)
       .sort((a, b) => Date.parse(b.addedAt || b.updatedAt || 0) - Date.parse(a.addedAt || a.updatedAt || 0));
     return {
-      ...storage,
+      ...storage, pricingPolicy: 'amazon_retail_aod', ttCatalogEnabled: false,
+      archivedCatalogCount: storage.catalog?.length || 0,
       backgroundScanning: this.backgroundRunning,
       notificationSending: Boolean(this.notificationPromise),
       readScheduler: this.readScheduler?.status() || null,

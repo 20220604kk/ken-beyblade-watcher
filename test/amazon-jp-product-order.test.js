@@ -37,7 +37,7 @@ test('日亞商品頁網址正規化為官方賣家與 JPY 商品頁', () => {
   assert.throws(() => normalizeAmazonJpProductUrl('https://example.com/dp/B0H861Y9Y3'), /Amazon\.co\.jp/);
 });
 
-test('商品頁只在官方價、自營、可購且未達帳號限購時放行', () => {
+test('商品頁只在自營、可購且未達限購時放行，不以 TT 定價擋單', () => {
   const base = {
     pageIssue: '', loginRequired: false, purchaseLimited: false, sellerConfirmed: true,
     priceText: '￥2,700', priceYen: 2700, buyNowAvailable: true, addCartAvailable: false
@@ -47,7 +47,7 @@ test('商品頁只在官方價、自營、可購且未達帳號限購時放行',
   assert.equal(evaluateAmazonJpProductOrder({ ...base, purchaseLimited: true }, msrp).reason, 'purchase_limited');
   assert.equal(evaluateAmazonJpProductOrder({ ...base, sellerConfirmed: false }, msrp).reason, 'seller_not_amazon');
   assert.equal(evaluateAmazonJpProductOrder({ ...base, priceText: 'TWD 590', priceYen: null }, msrp).reason, 'non_jpy_price');
-  assert.equal(evaluateAmazonJpProductOrder({ ...base, priceYen: 2702 }, msrp).reason, 'above_msrp');
+  assert.equal(evaluateAmazonJpProductOrder({ ...base, priceYen: 2702 }, msrp).reason, 'qualified');
   assert.equal(evaluateAmazonJpProductOrder({ ...base, signedIn: null, pageIssue: 'product_unreadable' }, msrp).reason, 'product_unreadable');
   assert.equal(evaluateAmazonJpProductOrder({ ...base, signedIn: false, loginRequired: true }, msrp).reason, 'login_required');
 });
@@ -73,7 +73,7 @@ test('商品頁任務只接受日亞掃描已核對的同 ASIN 原價自營新�
   assert.equal(matchesAmazonJpPurchaseSignal(config, { ...verifiedSignal, asin: 'B0H861Y9Y3' }, { source: '日亞官方原價', kind: 'restock' }), false);
   assert.equal(matchesAmazonJpPurchaseSignal(config, verifiedSignal, { source: '1999.co.jp', kind: 'restock' }), false);
   assert.equal(matchesAmazonJpPurchaseSignal(config, { ...verifiedSignal, sellerConfirmed: false }, { source: '日亞官方原價', kind: 'restock' }), false);
-  assert.equal(matchesAmazonJpPurchaseSignal(config, { ...verifiedSignal, priceYen: 882 }, { source: '日亞官方原價', kind: 'restock' }), false);
+  assert.equal(matchesAmazonJpPurchaseSignal(config, { ...verifiedSignal, priceYen: 882, msrpYen: null }, { source: '日亞自營AOD', kind: 'restock' }), true);
 });
 
 test('啟用後沒有掃描訊號就不開商品頁、不排週期刷新', async () => {

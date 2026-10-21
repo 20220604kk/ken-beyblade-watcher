@@ -65,27 +65,25 @@ export function evaluateAmazonJpProductOrder(snapshot, msrp, toleranceYen = 1) {
   if (snapshot.loginRequired) return { eligible: false, reason: 'login_required' };
   if (snapshot.pageIssue) return { eligible: false, reason: 'product_unreadable' };
   if (!snapshot.buyNowAvailable && !snapshot.addCartAvailable) return { eligible: false, reason: 'not_purchasable' };
-  if (!msrp?.msrpYen) return { eligible: false, reason: 'msrp_not_found' };
   if (snapshot.purchaseLimited) return { eligible: false, reason: 'purchase_limited' };
   if (!snapshot.sellerConfirmed) return { eligible: false, reason: 'seller_not_amazon' };
-  if (!snapshot.priceYen) return { eligible: false, reason: snapshot.priceText ? 'non_jpy_price' : 'price_missing' };
-  if (!isAmazonPriceWithinMsrp(snapshot.priceYen, msrp.msrpYen, toleranceYen)) return { eligible: false, reason: 'above_msrp' };
+  if (!(Number.isFinite(snapshot.priceYen) && snapshot.priceYen > 0)) return { eligible: false, reason: snapshot.priceText ? 'non_jpy_price' : 'price_missing' };
   if (!snapshot.buyNowAvailable && !snapshot.addCartAvailable) return { eligible: false, reason: 'not_purchasable' };
   return { eligible: true, reason: 'qualified' };
 }
 
 export function matchesAmazonJpPurchaseSignal(config, product, { source, kind } = {}) {
   if (!config?.enabled) return false;
-  if (source !== '日亞官方原價' || !['new', 'restock'].includes(kind)) return false;
+  if (!['日亞官方原價', '日亞自營AOD'].includes(source) || !['new', 'restock'].includes(kind)) return false;
   const targetAsin = extractAmazonAsin(config.targetUrl);
   const signalAsin = clean(product?.asin).toUpperCase();
   if (!targetAsin || targetAsin !== signalAsin) return false;
   return product?.available === true
     && product?.sellerConfirmed === true
-    && isAmazonPriceWithinMsrp(product?.priceYen, product?.msrpYen, config.priceToleranceYen ?? 1);
+    && Number.isFinite(product?.priceYen) && product.priceYen > 0;
 }
 
-export function validateAmazonJpProductCheckout(checkout, { asin, code, msrpYen, toleranceYen = 1, maxShippingYen = 500 } = {}) {
+export function validateAmazonJpProductCheckout(checkout, { asin, code, quotePriceYen, msrpYen, toleranceYen = 1, maxShippingYen = 500 } = {}) {
   let url;
   try { url = new URL(checkout.url); } catch { throw new Error('日亞結帳網址無法核對，不送單'); }
   if (url.protocol !== 'https:' || !/^(?:www\.)?amazon\.co\.jp$/i.test(url.hostname)
@@ -96,7 +94,7 @@ export function validateAmazonJpProductCheckout(checkout, { asin, code, msrpYen,
   if (!checkout.deliveryConfirmed) throw new Error('日亞送單前未確認收件配送資料，不送單');
   if (!Number.isFinite(checkout.shippingYen) || checkout.shippingYen < 0 || checkout.shippingYen > maxShippingYen) throw new Error(`日亞運費未確認或超過 ¥${maxShippingYen}，不送單`);
   if (!Number.isFinite(checkout.totalYen) || checkout.totalYen <= checkout.shippingYen
-    || !isAmazonPriceWithinMsrp(checkout.totalYen - checkout.shippingYen, msrpYen, toleranceYen)) throw new Error('日亞含運總額未確認或商品金額超過原價，不送單');
+    || !isAmazonPriceWithinMsrp(checkout.totalYen - checkout.shippingYen, quotePriceYen ?? msrpYen, toleranceYen)) throw new Error('日亞含運總額未確認或商品金額高於本輪自營報價，不送單');
   return { totalYen: checkout.totalYen, shippingYen: checkout.shippingYen };
 }
 
@@ -587,13 +585,10 @@ export class AmazonJpProductOrderMonitor {
   }
 
   resolveMsrp(snapshot) {
-    const amazon = this.amazonStorage();
-    return resolveAmazonJpMsrp({
-      asin: snapshot.asin,
-      title: snapshot.title,
-      catalog: amazon.catalog || [],
-      manualProducts: amazon.manualProducts || {}
-    });
+    // Compatibility method name; this is a quote, never a TT MSRP lookup.
+    return Number.isFinite(snapshot.priceYen) && snapshot.priceYen > 0
+      ? { code: snapshot.code || extractModelCode(snapshot.title), msrpYen: snapshot.priceYen,
+        quotePriceYen: snapshot.priceYen, source: 'amazon_retail_quote' } : null;
   }
 
   async openLogin() {
@@ -716,7 +711,7 @@ export class AmazonJpProductOrderMonitor {
     return { matched: true, queued: true, asin: targetAsin };
   }
 
-  async clickQualifiedOffer(page, snapshot, msrp) {
+  async clickQualifiedOffer(page, snapshot) {
     const buyNow = await firstVisible(page, ['#buy-now-button', 'input[name="submit.buy-now"]']);
     if (buyNow) {
       await this.recordStep('buy_now_click', { asin: snapshot.asin, priceYen: snapshot.priceYen });
@@ -724,7 +719,7 @@ export class AmazonJpProductOrderMonitor {
       return;
     }
     const addCart = await firstVisible(page, ['#add-to-cart-button', 'input[name="submit.add-to-cart"]']);
-    if (!addCart) throw new Error('原價自營條件成立，但商品頁找不到立即購買或加入購物車按鈕');
+    if (!addCart) throw new Error('自營可購條件成立，但商品頁找不到立即購買或加入購物車按鈕');
     await this.recordStep('add_cart_click', { asin: snapshot.asin, priceYen: snapshot.priceYen });
     await clickAndWaitForAmazonNavigation(page, addCart);
     const checkoutButton = await firstVisible(page, [
@@ -807,16 +802,15 @@ export class AmazonJpProductOrderMonitor {
       snapshot = this.readScheduler ? await this.readScheduler.run({ lane: 'single', scope: this.profileDirectory,
         key: targetAsin, canStart: () => !this.hasPendingApiTransaction() && this.storage().status !== 'needs_review'
           && (!purchase || this.canSchedule()) }, readSnapshot) : await readSnapshot();
-      const msrp = this.resolveMsrp(snapshot);
       const productMismatch = snapshot.asin !== targetAsin
         || Boolean(signal?.code && snapshot.code && signal.code !== snapshot.code);
       const evaluation = productMismatch
         ? { eligible: false, reason: 'product_mismatch' }
-        : evaluateAmazonJpProductOrder(snapshot, msrp, config.priceToleranceYen ?? 1);
+        : evaluateAmazonJpProductOrder(snapshot);
       Object.assign(storage, {
         targetAsin: snapshot.asin,
         lastCheckedAt: new Date().toISOString(),
-        lastSnapshot: { ...snapshot, msrpYen: msrp?.msrpYen || null, msrpSource: msrp?.source || '', evaluation: evaluation.reason },
+        lastSnapshot: { ...snapshot, msrpYen: null, msrpSource: '', quotePriceYen: snapshot.priceYen, pricingSource: 'amazon_retail_quote', evaluation: evaluation.reason },
         lastPageDiagnostic: snapshot.diagnostic || null,
         lastError: ''
       });
@@ -831,7 +825,7 @@ export class AmazonJpProductOrderMonitor {
           diagnostic: snapshot.diagnostic || null
         }].slice(-40);
       }
-      await this.recordStep('product_evaluated', { asin: snapshot.asin, result: evaluation.reason, priceYen: snapshot.priceYen, msrpYen: msrp?.msrpYen || null, diagnostic: snapshot.diagnostic || null });
+      await this.recordStep('product_evaluated', { asin: snapshot.asin, result: evaluation.reason, priceYen: snapshot.priceYen, quotePriceYen: snapshot.priceYen, diagnostic: snapshot.diagnostic || null });
       if (evaluation.reason === 'verification_required') throw Object.assign(new Error('日亞要求人工驗證；請開啟專用視窗處理，已暫停自動刷新'), { code: 'AMAZON_VERIFICATION_REQUIRED' });
       if (evaluation.reason === 'rate_limited') throw Object.assign(new Error('Amazon.co.jp 回傳真正的流量限制或驗證頁'), { code: 'AMAZON_RATE_LIMITED' });
       if (evaluation.reason === 'login_required') throw Object.assign(new Error('日亞商品頁專用瀏覽器尚未登入或登入已失效；請完成登入檢查'), { code: 'AMAZON_LOGIN_REQUIRED' });
@@ -925,14 +919,14 @@ export class AmazonJpProductOrderMonitor {
         ...(this.activeRaceLease ? { route: 'api', raceId: this.activeRaceLease.waveId } : {}),
         signalAt: signal?.matchedAt ? new Date(signal.matchedAt).toISOString() : null,
         scanStartedAt: new Date(this.taskClock).toISOString(), taskStartedAt: storage.taskStartedAt,
-        snapshot, msrpYen: msrp?.msrpYen, steps: this.currentScanSteps, compactSteps: true
+        snapshot, msrpYen: null, steps: this.currentScanSteps, compactSteps: true
       });
       this.browserEvidenceStarted=false;
       this.browserEvidenceResponse=false;
       const beforeSubmit = async checkout => {
         const currentConfig = this.getConfig() || {};
         const quote = validateAmazonJpProductCheckout(checkout, { asin: targetAsin, code: snapshot.code,
-          msrpYen: msrp.msrpYen, toleranceYen: currentConfig.priceToleranceYen ?? 1,
+          quotePriceYen: snapshot.priceYen, toleranceYen: currentConfig.priceToleranceYen ?? 1,
           maxShippingYen: Math.max(0, Math.min(10_000, Number(currentConfig.maxShippingYen ?? 500) || 0)) });
         await this.recordStep('checkout_verified', { step: 6, asin: targetAsin, quantity: 1, ...quote });
       };
@@ -941,7 +935,7 @@ export class AmazonJpProductOrderMonitor {
         result = await apiClient.checkout(snapshot, { beforeSubmit });
         submitted = apiClient.submitted;
       } else {
-      await this.clickQualifiedOffer(page, snapshot, msrp);
+      await this.clickQualifiedOffer(page, snapshot);
       result = await this.checkoutRunner(
         page,
         (targetPage) => this.checkoutSnapshot(targetPage),

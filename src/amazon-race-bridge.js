@@ -61,11 +61,10 @@ export class AmazonRaceBridge {
   }
   task(slot) {
     const m = this.monitors[slot], c = m.getConfig(), asin = extractAmazonAsin(c.targetUrl);
-    const price = m.resolveMsrp({ asin, title: m.targetProduct()?.title || '' });
     const wave = this.coordinator.current(slot), pending = wave?.routes.frontend;
     return { slot, asin, enabled: Boolean(c.enabled && !m.interactive && !m.browserOperation),
       url: `https://www.amazon.co.jp/dp/${asin}?m=AN1VRQENFRJN5&language=ja_JP&currency=JPY`,
-      maxPriceYen: price?.msrpYen || null, toleranceYen: c.priceToleranceYen ?? 1,
+      pricingPolicy: 'amazon_retail_quote', maxPriceYen: null, toleranceYen: c.priceToleranceYen ?? 1,
       maxShippingYen: c.maxShippingYen ?? 500, intervalMs: m.pollIntervalMs(),
       pending: pending?.state || '', retryAt: pending?.state === 'failed' && !pending.grantedAt ? pending.retry?.nextRetryAt || '' : '',
       ...(pending && ['preparing', 'granted', 'unknown'].includes(pending.state) ? { recovery: {
@@ -104,18 +103,17 @@ export class AmazonRaceBridge {
       const priceInput = page.$('[name="items[0.base][customerVisiblePrice][currencyCode]"]').first().val();
       const price = priceInput === 'JPY' ? Number(page.$('[name="items[0.base][customerVisiblePrice][amount]"]').first().val()) : parseYen(priceText);
       const title = text(page.$('#productTitle').text());
-      const msrp = monitor.resolveMsrp({ asin: task.asin, title });
-      if (!title || !msrp?.msrpYen || !Number.isSafeInteger(price) || price <= 0 || price > msrp.msrpYen + task.toleranceYen) return { action: 'wait' };
+      if (!title || !Number.isSafeInteger(price) || price <= 0) return { action: 'wait' };
       parseAmazonDirectBuyForm(page, { asin: task.asin, priceYen: price });
       let lease;
       try { lease = await this.coordinator.begin(slot, 'frontend', task.asin); }
       catch (error) { if (error.code === 'AMAZON_RACE_STOPPED') return { action: 'wait' }; throw error; }
       const record = await this.history.begin({ slot, mode: 'parallel', trigger: 'extension', route: 'frontend', raceId: lease.waveId,
         scanStartedAt: new Date().toISOString(), snapshot: { asin: task.asin, title, priceYen: price, code: extractModelCode(title) },
-        msrpYen: msrp.msrpYen, compactSteps: true });
+        msrpYen: null, compactSteps: true });
       this.records.set(slot, record);
       const attempt = this.coordinator.find(lease).attempt;
-      Object.assign(attempt, { priceYen: price, msrpYen: msrp.msrpYen, code: extractModelCode(title), recordId: record.id });
+      Object.assign(attempt, { priceYen: price, quotePriceYen: price, code: extractModelCode(title), recordId: record.id });
       await this.coordinator.persist();
       runtime.state = 'preparing'; await this.step(slot, 'buy_now_click');
       return { action: 'buy', lease };
@@ -137,7 +135,7 @@ export class AmazonRaceBridge {
       // Unlike an API form override, a frontend click must already be in JPY.
       if (page.$('#spc-form [name="currentCurrencyOption"]').val() !== 'MARKETPLACE') return { action: 'jpy' };
       const review = parseAmazonHttpReview(page, { asin: lease.asin, priceYen: attempt.priceYen });
-      validateAmazonJpProductCheckout(review.checkout, { asin: lease.asin, code: attempt.code, msrpYen: attempt.msrpYen,
+      validateAmazonJpProductCheckout(review.checkout, { asin: lease.asin, code: attempt.code, quotePriceYen: attempt.quotePriceYen ?? attempt.priceYen,
         toleranceYen: monitor.getConfig().priceToleranceYen ?? 1, maxShippingYen: monitor.getConfig().maxShippingYen ?? 500 });
       await this.step(slot, 'checkout_verified');
       const grant = await this.coordinator.grant(lease);

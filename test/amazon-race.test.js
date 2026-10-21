@@ -126,13 +126,26 @@ for (const [name, options] of Object.entries({ wrongAsin: { target: 'B0TEST0002'
     assert.equal(f.coordinator.status('A').routes.frontend.state, 'preparing');
   });
 }
-test('TWD requires native JPY selection, unavailable/over-price/third-party product never obtains send lease', async t => {
+test('TWD requires native JPY selection; unavailable/third-party rejected, TT MSRP no longer gates retail', async t => {
   const f = await bridgeFixture(t);
-  for (const options of [{ available: false }, { price: 900 }]) assert.equal((await f.bridge.message('A', { type: 'product', url: origin + '/dp/' + asin, html: product(options) })).action, 'wait');
+  for (const options of [{ available: false }]) assert.equal((await f.bridge.message('A', { type: 'product', url: origin + '/dp/' + asin, html: product(options) })).action, 'wait');
   await assert.rejects(f.bridge.message('A', { type: 'product', url: origin + '/dp/' + asin, html: product({ seller: 'OTHER' }) }));
   const { lease } = await f.bridge.message('A', { type: 'product', url: origin + '/dp/' + asin, html: product() });
   assert.equal((await f.bridge.message('A', { type: 'review', lease, url: origin + '/checkout/p/fixture/spc', html: review({ jpy: false }) })).action, 'jpy');
   assert.equal(f.coordinator.status('A').routes.frontend.state, 'preparing');
+});
+
+test('frontend uses its own retail quote instead of TT/manual MSRP, then rejects checkout above that quote', async t => {
+  const f = await bridgeFixture(t);
+  f.bridge.monitors.A.resolveMsrp = () => assert.fail('frontend cannot resolve TT');
+  assert.equal(f.bridge.task('A').pricingPolicy, 'amazon_retail_quote');
+  const { lease } = await f.bridge.message('A', { type: 'product', url: origin + '/dp/' + asin, html: product({ price: 9900 }) });
+  assert.ok(lease);
+  await assert.rejects(f.bridge.message('A', { type: 'review', lease, url: origin + '/checkout/p/fixture/spc', html: review({ total: 11000 }) }), /金額無法核對/);
+  assert.equal(f.coordinator.status('A').routes.frontend.state, 'preparing');
+  const result = await f.bridge.message('A', { type: 'review', lease, url: origin + '/checkout/p/fixture/spc',
+    html: review({ total: 10400 }).replace('商品: JPY 880', '商品: JPY 9900') });
+  assert.equal(result.action, 'submit');
 });
 test('CAPTCHA/login, external URLs, misleading purchaseId, and no final grant cannot claim a successful order', async t => {
   for (const url of ['https://evil.invalid/', 'https://www.amazon.co.jp/ap/signin']) assert.throws(() => raceDocument({ url, html: product() }));

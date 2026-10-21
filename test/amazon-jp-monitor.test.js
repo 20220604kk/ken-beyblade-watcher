@@ -198,66 +198,17 @@ test('X 速報完整商品網址可穩定抽出新日亞 ASIN', () => {
   assert.deepEqual(urls.map(extractAmazonAsin), ['B0HJ7CPXJ6', 'B0HJ75X3PN', 'B0HJ783F18']);
 });
 
-test('官方定價收錄前的專線商品每輪直查，收錄後自動退出專線', async () => {
-  let loaded = 0;
-  let notified = 0;
-  const storage = {};
-  const monitor = new AmazonJapanMonitor({
-    dataDir: '',
-    state: { data: {} },
-    getConfig: () => ({}),
-    notify: async () => { notified += 1; },
-    log: () => {}
-  });
-  monitor.loadPage = async () => {
-    loaded += 1;
-    return `
-      <span id="productTitle">BEYBLADE X BX-52 ラスタードラグーン</span>
-      <div id="corePrice_feature_div"><span class="a-price"><span class="a-offscreen">￥2,000</span></span></div>
-      <div id="desktop_buybox"><script>{"merchantId":"${AMAZON_JP_SELLER_ID}"}</script><input id="add-to-cart-button"></div>
-    `;
-  };
-  const products = [{
-    asin: 'B0HJ783F18',
-    code: 'BX-52',
-    title: 'BEYBLADE X BX-52 ラスタードラグーン',
-    manualMsrpYen: 2000,
-    dedicatedUntilCatalog: true
-  }];
-  const manualPricing = [{
-    code: 'BX-52',
-    name: 'ラスタードラグーン',
-    normalizedName: 'ラスタードラグーン',
-    msrpYen: 2000,
-    pricingSource: 'manual_pre_catalog'
-  }];
-
-  const beforeCatalog = await monitor.inspectDedicatedPreCatalogProducts(products, [], manualPricing, storage);
-  assert.equal(beforeCatalog.pending.length, 1);
-  assert.equal(beforeCatalog.successful, 1);
-  assert.equal(beforeCatalog.observed.length, 1);
-  assert.equal(loaded, 1);
-  assert.equal(storage.preCatalogWatch.B0HJ783F18.sellerConfirmed, true);
-  assert.equal(storage.preCatalogWatch.B0HJ783F18.buyButtonPresent, true);
-  assert.equal(storage.preCatalogWatch.B0HJ783F18.msrpYen, 2000);
-  assert.equal(storage.preCatalogWatch.B0HJ783F18.available, true);
-  assert.equal(notified, 0);
-
-  const officialCatalog = [{
-    code: 'BX-52',
-    name: 'ラスタードラグーン',
-    normalizedName: 'ラスタードラグーン',
-    msrpYen: 2000
-  }];
-  const afterCatalog = await monitor.inspectDedicatedPreCatalogProducts(
-    products,
-    officialCatalog,
-    officialCatalog,
-    storage
-  );
-  assert.equal(afterCatalog.pending.length, 0);
-  assert.equal(loaded, 1);
-  assert.deepEqual(storage.preCatalogWatch, {});
+test('原定價前專線改為優先自營報價，不再等 TT 收錄或退出', async () => {
+  const storage = {}, monitor = new AmazonJapanMonitor({ dataDir: '', state: { data: {} }, getConfig: () => ({}), notify: async () => {} });
+  let reads = 0;
+  monitor.verifyOffer = async p => { reads++; return { ...p, available: true, sellerConfirmed: true, buyButtonPresent: true, priceYen: 4000 }; };
+  const products = [{ asin: 'B0HJ783F18', code: 'BX-52', dedicatedUntilCatalog: true }];
+  for (const catalog of [[], [{ code: 'BX-52', msrpYen: 1 }]]) {
+    const result = await monitor.inspectDedicatedPreCatalogProducts(products, catalog, catalog, storage);
+    assert.equal(result.pending.length, 1); assert.equal(result.successful, 1);
+    assert.equal(storage.preCatalogWatch.B0HJ783F18.available, true);assert.equal(storage.preCatalogWatch.B0HJ783F18.msrpYen, null);
+  }
+  assert.equal(reads, 2);
 });
 
 test('商品頁必須同時有 Amazon.co.jp 賣家 ID、購買按鈕與 Buy Box 日圓價格', () => {
@@ -299,7 +250,7 @@ test('重複型號無法由名稱唯一對應時採取 fail-closed', () => {
   assert.equal(matchTakaraTomyCatalog({ code: 'BX-00', title: 'BEYBLADE X BX-00 限定品' }, catalog), null);
 });
 
-test('X 只作交叉驗證標記，通知仍列出官方定價與 Amazon.co.jp 賣家', () => {
+test('X 只作交叉驗證標記，通知列出自營報價且不假稱 TT 定價驗證', () => {
   assert.equal(extractAmazonAsin('https://www.amazon.co.jp/dp/B0D6MZB1VF?aod=1&tag=bey_sokuhou-22'), 'B0D6MZB1VF');
   const message = amazonJapanNotification({
     asin: 'B0H861Y9Y3', code: 'UX-21', title: 'UX-21 ヘルズネザー', priceYen: 4300, msrpYen: 4500,
@@ -309,7 +260,7 @@ test('X 只作交叉驗證標記，通知仍列出官方定價與 Amazon.co.jp �
   assert.match(serialized, /X @bey_sokuhou/);
   assert.match(serialized, /Amazon\.co\.jp/);
   assert.match(serialized, /約 NT\$/);
-  assert.match(serialized, /4,500/);
+  assert.doesNotMatch(serialized, /4,500/); assert.match(serialized, /不對照 TT 定價/);
   assert.equal(message.options.embeds[0].thumbnail.url, 'https://m.media-amazon.com/images/I/ux21.jpg');
   assert.doesNotMatch(serialized, /x\.com|twitter\.com/);
 });
@@ -345,7 +296,7 @@ test('日亞原價測試接受自訂商品網址與模擬價格，拒絕非日�
   assert.equal(notice.product.priceYen, 2200);
   assert.equal(notice.product.url, canonicalAmazonJapanUrl('B0HJ783F18'));
   assert.match(JSON.stringify(notice), /日亞價格/);
-  assert.match(JSON.stringify(notice), /官方定價.*自訂測試資料/);
+  assert.match(JSON.stringify(notice), /價格與可購狀態為模擬/);
   assert.throws(() => amazonJapanTestNotification({ ...selection, url: 'https://amazon.co.jp.example.com/dp/B0HJ783F18' }), /只接受有效/);
   assert.throws(() => amazonJapanTestNotification({ ...selection, priceYen: 2500 }), /不高於/);
   assert.throws(() => amazonJapanTestNotification({ ...selection, title: '' }), /商品名稱/);
@@ -523,5 +474,5 @@ test('日亞官方原價新品或補貨通知會並行送出同品項刷新提�
   assert.equal(result.restocked, 1);
   assert.equal(signals.length, 1);
   assert.equal(signals[0].candidate.asin, asin);
-  assert.deepEqual(signals[0].signal, { source: '日亞官方原價', kind: 'restock' });
+  assert.deepEqual(signals[0].signal, { source: '日亞自營AOD', kind: 'restock' });
 });
