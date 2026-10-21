@@ -522,6 +522,8 @@ export class FunboxMonitor {
     notify = sendNotification,
     onPurchaseCandidate = null,
     onInventorySnapshot = null,
+    onExcludedProduct = null,
+    sourceIntervalMs = null,
     fetcher = fetch,
     url = FUNBOX_BEYBLADE_URL,
     sources = null,
@@ -535,6 +537,9 @@ export class FunboxMonitor {
     this.notify = notify;
     this.onPurchaseCandidate = typeof onPurchaseCandidate === 'function' ? onPurchaseCandidate : null;
     this.onInventorySnapshot = typeof onInventorySnapshot === 'function' ? onInventorySnapshot : null;
+    this.onExcludedProduct = onExcludedProduct;
+    this.sourceIntervalMs = sourceIntervalMs;
+    this.cooldownUntil = 0;
     this.fetcher = fetcher;
     this.url = url;
     this.sources = Array.isArray(sources) && sources.length
@@ -658,8 +663,10 @@ export class FunboxMonitor {
 
   async fetchSource(source, { previousSeen = {} } = {}) {
     const startedAt = Date.now();
+    if(startedAt<this.cooldownUntil)return {...source,ok:false,fresh:false,products:[],productCount:0,durationMs:0,error:'HTTP 限流冷卻中',retryAfterMs:this.cooldownUntil-startedAt};
     const cached = this.sourceCache.get(source.id);
-    if (cached && source.intervalMs > 0 && startedAt - cached.fetchedAtMs < source.intervalMs) {
+    const intervalMs = this.sourceIntervalMs ? this.sourceIntervalMs(source,startedAt) : source.intervalMs;
+    if (cached && intervalMs > 0 && startedAt - cached.fetchedAtMs < intervalMs) {
       return {
         ...source,
         ok: true,
@@ -703,7 +710,15 @@ export class FunboxMonitor {
           products
         };
       }
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      if (!response.ok) {
+        if([429,503].includes(response.status)){
+          const raw=response.headers.get('retry-after');const seconds=Number(raw);
+          const retryAt=raw&&Number.isFinite(seconds)?Date.now()+seconds*1000:Date.parse(raw||'');
+          this.cooldownUntil=Math.max(this.cooldownUntil,Date.now()+60000,Number.isFinite(retryAt)?retryAt:0);
+          throw Object.assign(new Error(`HTTP ${response.status}，遵守限流冷卻`),{retryAfterMs:this.cooldownUntil-Date.now()});
+        }
+        throw new Error(`HTTP ${response.status}`);
+      }
       const body = validateFunboxSourceBody(await response.text(), source.url);
       let products = parseFunboxResponse(body, source.url);
       const hydrationErrors = [];
@@ -748,7 +763,8 @@ export class FunboxMonitor {
         durationMs: Date.now() - startedAt,
         productCount: 0,
         products: [],
-        error: error.message
+        error: error.message,
+        retryAfterMs: error.retryAfterMs || 0
       };
     }
   }
@@ -829,6 +845,7 @@ export class FunboxMonitor {
         const result = await this.fetchSource(source, { previousSeen: previous.seen });
         if (result.ok && result.fresh !== false) {
           for (const product of result.products) {
+            if(shouldSkipFunboxProduct(product)&&this.onExcludedProduct)void Promise.resolve(this.onExcludedProduct(product)).catch(()=>this.log('APP 上架通知處理失敗，保留活動紀錄供核對','funbox'));
             dispatchEarlyCandidate(product, result);
             dispatchEarlyNotification(product, result);
           }
@@ -841,7 +858,7 @@ export class FunboxMonitor {
       const successfulSources = sourceResults.filter((source) => source.ok);
       const freshSuccessfulSources = successfulSources.filter((source) => source.fresh !== false);
       if (!successfulSources.length) {
-        throw new Error(`Funbox 所有資料源失敗：${sourceResults.map((source) => `${source.label} ${source.error}`).join('；')}`);
+        throw Object.assign(new Error(`Funbox 所有資料源失敗：${sourceResults.map((source) => `${source.label} ${source.error}`).join('；')}`),{retryAfterMs:Math.max(0,...sourceResults.map(s=>s.retryAfterMs||0))});
       }
       const parsedProducts = mergeFunboxProductSources(successfulSources);
       const skippedProducts = parsedProducts.filter(shouldSkipFunboxProduct);

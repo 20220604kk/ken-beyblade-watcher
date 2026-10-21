@@ -29,7 +29,7 @@ async function harness(work,{timeout=false,acceptedAfterTimeout=false,wrongPrice
   const api={dispose:async()=>{},get:async(url)=>{
     if(url===origin+'/account')return response('<a href="/account/logout">logout</a>',url);
     if(/\/products\/.*\.json$/.test(url)){const id=url.match(/products\/(.*)\.json/)[1];return response({title:names[id],url:origin+'/products/'+id,price:999999,variants:[{id:variants[id],inventory_quantity:stockZero?0:5,inventory_policy:'deny'}]},url);}
-    if(url===origin+'/cart')return cart?response(html(),cartUrl()):response('<a href="/account/logout">logout</a>',origin+'/account/index');
+    if(url===origin+'/cart'||/^\/carts\/[a-z0-9]{32}\/?$/.test(new URL(url).pathname))return cart?response(html(),cartUrl()):response('<a href="/account/logout">logout</a>',origin+'/account/index');
     if(url.includes('/shipping_rates_and_payment_method_items'))return response({payment_items:[{id:77,service:'seven_cod',is_cod:true,is_cvs:true,shipping_rate:'seven_cod',payment_rate:shipping,payment_charge:0}]},url);
     if(url===origin+'/account/orders')return response('<a href="/account/logout">logout</a>'+orders.map(o=>`<a href="/account/orders/${o.token}">order</a>`).join(''),url);
     const order=orders.find(o=>url===origin+'/account/orders/'+o.token);
@@ -78,6 +78,22 @@ test('特別任務：多車選擇僅接受唯一目標車的官方表單',()=>{
  assert.equal(selectConflictForm(form,cart,{title:'黃蜂要塞'}).form.cart_hash,'target');
  assert.throws(()=>selectConflictForm(form+form,cart,{title:'黃蜂要塞'}));assert.throws(()=>selectConflictForm(form.replace(origin,'https://wrong.invalid'),cart,{title:'黃蜂要塞'}));
 });
+test('特別任務：官網現行cart_conflict亦含checkout-v3，React商品以複合id識別',async()=>{
+ const token='a'.repeat(32),hash=JSON.stringify({'10_normal_':1});
+ const props={cart:{token},conflictCartsGroups:{normal:[{[hash]:[[{id:'10_normal_',quantity:1,title:'測試黃蜂'}],['一般商品','normal','宅配']]}]}};
+ const html=`<meta name="csrf-token" content="synthetic"><div id="checkout-v3" data-react-props='${JSON.stringify(props)}'></div>`;
+ assert.equal(selectConflictForm(html,origin+'/carts/'+token+'/cart_conflict',{variantId:'10'}).form.cart_hash,hash);
+ assert.throws(()=>selectConflictForm(html,origin+'/carts/'+token+'/cart_conflict',{variantId:'11'}));
+ await harness(async({task})=>{
+   const original=task.checked.bind(task);let selected=0;
+   task.checked=async(api,method,url,options,job)=>{
+    if(method==='get'&&url===origin+'/cart')return response(html,origin+'/carts/'+token+'/cart_conflict');
+    if(method==='post'&&url.endsWith('/checkout_no_conflict')){selected++;assert.equal(options.form.cart_hash,hash);throw new Error('synthetic stop after correct selection');}
+    return original(api,method,url,options,job);
+   };
+   await assert.rejects(()=>task.cart({}, {variantId:'10'},{}),/synthetic stop/);assert.equal(selected,1);
+ });
+});
 test('特別任務：黃蜂、黃蜂、海怪依序建立三張555元COD訂單，意圖先保存',async()=>{
  await harness(async({task,state,events,orders,counts,dir})=>{await task.run();assert.deepEqual(orders.map(o=>o.productId),rows.map(r=>r.productId));assert.deepEqual(counts(),{postCount:3,addCount:3,removed:0});assert.equal(task.data.jobs.every(j=>j.status==='ordered'),true);
  const records=Object.values(state.data.commerce.autoPurchase.records);assert.equal(records.length,3);assert.equal(records.every(r=>r.specialTask&&r.accountSlot==='C'&&r.payment==='seven_cod'&&r.amount===555),true);assert.ok(events.indexOf('durable')<events.indexOf('post'));
@@ -101,7 +117,13 @@ test('特別任務：序號明確無效只移除本筆商品，接續不同序�
  await harness(async({task,counts,orders})=>{await task.run();assert.deepEqual(task.data.jobs.map(j=>j.status),['skipped','ordered','ordered']);assert.deepEqual(counts(),{postCount:2,addCount:3,removed:1});assert.equal(orders.length,2);},{invalidFirst:true});
 });
 test('特別任務：明確售罄不加車、不送單',async()=>{
- await harness(async({task,counts})=>{await task.run();assert.equal(counts().addCount,0);assert.equal(counts().postCount,0);assert.equal(task.data.jobs.every(j=>j.status==='skipped'),true);},{stockZero:true});
+ await harness(async({task,clock,counts})=>{clock.now=Date.parse(start)+31000;await task.run();assert.equal(counts().addCount,0);assert.equal(counts().postCount,0);assert.equal(task.data.jobs.every(j=>j.status==='skipped'),true);},{stockZero:true});
+});
+test('特別任務：剛開放庫存零先等待更新，不將四筆全部略過',async()=>{
+ await harness(async({task,counts})=>{await task.run();assert.equal(counts().addCount,0);assert.equal(task.data.jobs.every(j=>j.status==='queued'),true);assert.equal(task.data.enabled,true);},{stockZero:true});
+});
+test('特別任務：已啟用時調整到10:00:05，保留序號、順序與啟用狀態',async()=>{
+ await harness(async({task})=>{const before=JSON.stringify(task.codes);await task.reschedule({startAt:'2026-10-21T10:00:05+08:00'});assert.equal(task.data.startAt,'2026-10-21T02:00:05.000Z');assert.equal(task.data.enabled,true);assert.equal(JSON.stringify(task.codes),before);task.data.jobs[0].status='unknown';await assert.rejects(()=>task.reschedule({startAt:'2026-10-21T10:00:10+08:00'}));});
 });
 test('特別任務：啟用必須確認，停用只釋放安全帳號',async()=>{
  await harness(async({task})=>{task.data.enabled=false;await assert.rejects(()=>task.arm({}));await task.arm({confirmRealOrders:true});assert.equal(task.isReserved('C'),true);await task.stop();assert.equal(task.isReserved('C'),false);task.data.jobs[0].status='unknown';await task.stop();assert.equal(task.isReserved('C'),true);});
@@ -133,4 +155,26 @@ test('特別任務：有未決交易不能移除入口，安全移除後保留�
 });
 test('特別任務：重啟後送單意圖保留未知保護，不自動重送',async()=>{
  await harness(async({task,state})=>{task.data.jobs[0].status='submitting';task.data.jobs[0].intent={total:555};await task.save();const restarted=await new FunboxAppRedemption({dataDir:task.dataDir,state,credentials:task.credentials,multi:task.multi,apiFactory:async()=>{throw new Error('No network allowed')}}).init();try{assert.equal(restarted.data.enabled,false);assert.equal(restarted.data.jobs[0].status,'unknown');assert.equal(restarted.isReserved('C'),true);assert.ok(state.data.commerce.autoPurchase.externalAccountReservations.C);await assert.rejects(()=>restarted.arm({confirmRealOrders:true}));}finally{await restarted.close();}});
+});
+test('持續重試：開放初期序號暫不可用不清車、不停任務，恢復後接續三單不重複加車',async()=>{
+ await harness(async({task,api,clock,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};const post=api.post;let lookups=0;
+  api.post=async(url,options)=>url.endsWith('/coupons')?response(++lookups===1?{err_msg:'not active yet'}:{code:options.data.code},url):post(url,options);
+  await task.run();assert.equal(task.data.enabled,true);assert.equal(counts().addCount,1);assert.equal(counts().removed,0);assert.equal(counts().postCount,0);
+  clock.now=Date.parse(task.data.nextRetryAt)+1;await task.run();assert.equal(counts().postCount,3);assert.equal(counts().addCount,3);assert.equal(task.data.jobs.every(j=>j.status==='ordered'),true);
+ });
+});
+test('持續重試：官方回200但優惠重算延遲，先重讀到折抵成立，不因舊價格放棄或重複套券',async()=>{
+ await harness(async({task,api,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};const get=api.get,post=api.post;let stale=0,apply=0;
+  api.post=async(url,options)=>{if(url.endsWith('/apply_coupon'))apply++;return post(url,options);};
+  api.get=async url=>{const r=await get(url);if(/^\/carts\/[a-z0-9]{32}$/.test(new URL(url).pathname)){let html=await r.text();if(html.includes('"coupon_discount":999504')&&stale<2){stale++;html=html.replace('"coupon_discount":999504','"coupon_discount":0');return response(html,r.url());}}return r;};
+  await task.run();assert.equal(counts().postCount,3);assert.equal(apply,3);assert.equal(stale,2);
+ });
+});
+test('持續重試：正式送單不明會持續自動查單，45分鐘後仍不盲重送或停用',async()=>{
+ await harness(async({task,clock,counts})=>{
+  task.data.continuousRetry=true;task.waitFor=async()=>{};await task.run();assert.equal(task.data.enabled,true);assert.equal(task.data.jobs[0].status,'unknown');
+  clock.now+=45*60000;await task.run();assert.equal(task.data.enabled,true);assert.equal(counts().postCount,1);assert.equal(counts().addCount,1);
+ },{timeout:true});
 });

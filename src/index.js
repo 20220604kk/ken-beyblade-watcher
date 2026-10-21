@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import { spawn } from 'node:child_process';
 import { OperationalLogPolicy } from './log-policy.js';
 import { AmazonReadScheduler } from './amazon-read-scheduler.js';
+import { FunboxEventDay, isFunboxEventDay, funboxEventDelay } from './funbox-event-day.js';
 import { safePurchaseText } from './purchase-diagnostics.js';
 import { catalogListPatch } from './product-sheet-catalog.js';
 import fs from 'node:fs/promises';
@@ -746,6 +747,8 @@ const shoppingDutyNotifier = new DailyDutyNotifier({
   log: (message) => log(message, 'shopping')
 });
 
+const funboxEventDay = new FunboxEventDay({state,log,enabled:()=>config.funbox.enabled&&!config.systemPause.active,notify:(text,options)=>sendNotification(text,options)});
+funboxEventDay.start();
 const funboxMonitor = new FunboxMonitor({
   state,
   url: config.funbox.collectionUrl,
@@ -753,6 +756,10 @@ const funboxMonitor = new FunboxMonitor({
   log,
   onPurchaseCandidate: (candidate) => enqueueImmediateFunboxPurchaseCandidate(candidate),
   onInventorySnapshot: (products, observedAt) => autoPurchase.observeFunboxInventory(products, observedAt),
+  onExcludedProduct: product=>funboxEventDay.observe(product),
+  // Outer scan cadence is already 1s. A second completion-based cache would
+  // otherwise skip alternate scans and turn the fast line back into 2s.
+  sourceIntervalMs: (source,now)=>isFunboxEventDay(now)&&source.id==='search'?0:source.intervalMs,
   notify: (text, options) => sendNotification(text, {
     ...options,
     channelMode: config.notifications.funbox
@@ -1021,6 +1028,7 @@ if (fsSync.existsSync(optionalFunboxTaskUrl) && !fsSync.existsSync(path.join(dat
     const { FunboxAppRedemption } = await import(optionalFunboxTaskUrl.href);
     funboxSpecialTask = await new FunboxAppRedemption({ dataDir, state, credentials: purchaseCredentials,
       multi: autoPurchase.adapters.funbox, coordinator: autoPurchase, applyRuntimeConfig: () => autoPurchase.applyRuntimeConfig(),
+      onProduct: product=>funboxEventDay.observe(product),
       log: message => log(message, 'funbox') }).init();
   } catch {
     log('方爸APP兌換載入失敗；一般監控維持，既有 C 交易保護保留。請檢查特別任務本機資料。', 'funbox');
@@ -1754,6 +1762,7 @@ function isFunboxBoostActive(now = Date.now()) {
 }
 
 function effectiveFunboxIntervalSeconds(now = Date.now()) {
+  if(isFunboxEventDay(now))return 1;
   return isFunboxBoostActive(now)
     ? config.funbox.boostIntervalSeconds
     : config.funbox.intervalSeconds;
@@ -1772,7 +1781,7 @@ function updateFunboxBoost(result, now = new Date()) {
         now.getTime() + config.funbox.boostDurationMinutes * 60 * 1000
       ).toISOString();
       log(
-        `Funbox 發現新品，切換為每 ${config.funbox.boostIntervalSeconds} 秒高速追蹤庫存。`,
+        `Funbox 發現新品，切換為每 ${effectiveFunboxIntervalSeconds(now.getTime())} 秒高速追蹤庫存。`,
         'funbox'
       );
     }
@@ -1834,6 +1843,7 @@ function scheduleFunbox({ immediate = false, delayMs = null } = {}) {
     await syncAutoPurchaseWindowState().catch((error) => log(`登入心跳排程更新失敗：${error.message}`, 'funbox'));
     runtime.funboxScanning = true;
     const scanStartedAtMs = Date.now();
+    let scanFailed=false, retryAfterMs=0;
     try {
       runtime.lastFunboxScan = await funboxMonitor.scan({
         notifyExistingOnFirstRun: config.funbox.notifyExistingOnFirstRun,
@@ -1841,7 +1851,10 @@ function scheduleFunbox({ immediate = false, delayMs = null } = {}) {
       });
       enqueueFunboxAutoPurchase(runtime.lastFunboxScan);
       updateFunboxBoost(runtime.lastFunboxScan);
+      scanFailed=Boolean(runtime.lastFunboxScan.errors?.length);
+      retryAfterMs=Math.max(0,funboxMonitor.cooldownUntil-Date.now());
     } catch (error) {
+      scanFailed=true;retryAfterMs=error.retryAfterMs||0;
       runtime.lastError = `Funbox 官網：${error.message}`;
       log(`Funbox 官網掃描失敗：${error.message}`, 'funbox');
     } finally {
@@ -1849,7 +1862,9 @@ function scheduleFunbox({ immediate = false, delayMs = null } = {}) {
       if (config.funbox.enabled) {
         const intervalMs = effectiveFunboxIntervalSeconds(Date.now()) * 1000;
         scheduleFunbox({
-          delayMs: fixedCadenceRemainingMs(intervalMs, scanStartedAtMs)
+          delayMs: isFunboxEventDay(Date.now())
+            ? scanFailed ? funboxEventDelay(Date.now(),{failed:true,retryAfterMs}) : fixedCadenceRemainingMs(1000,scanStartedAtMs)
+            : Math.max(retryAfterMs,fixedCadenceRemainingMs(intervalMs, scanStartedAtMs))
         });
       }
     }
@@ -2827,6 +2842,7 @@ const dashboard = createDashboard({
       boostUntil: runtime.funboxBoostUntil,
       boostProductCount: runtime.funboxBoostProductCount,
       effectiveIntervalSeconds: effectiveFunboxIntervalSeconds(),
+      eventDay: funboxEventDay.status(),
       lastScan: runtime.lastFunboxScan,
       seenCount: Object.keys(state.data.commerce?.funbox?.seen || {}).length,
       excludedCount: Object.keys(state.data.commerce?.funbox?.excluded || {}).length,
@@ -4261,6 +4277,7 @@ function shutdown(reason = 'shutdown', exitCode = 0) {
     clearSaleReminderSchedule();
     clearDutyNotificationSchedule();
     clearDiscordAutomationSchedule();
+    funboxEventDay.close();
     dashboard.close();
     amazonReadScheduler.close();
     const results = await Promise.allSettled([

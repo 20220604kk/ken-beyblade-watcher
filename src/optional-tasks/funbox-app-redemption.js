@@ -78,7 +78,8 @@ export function selectConflictForm(html, currentUrl, product) {
       for (const [hash, group] of Object.entries(value)) {
         if (Array.isArray(group) && Array.isArray(group[0]) && Array.isArray(group[1])) {
           const items = group[0];
-          if (items.length === 1 && String(items[0].variant_id) === String(product.variantId) && Number(items[0].quantity) === 1) found.push(hash);
+          const variant = items[0]?.variant_id ?? String(items[0]?.id || '').match(/^(\d+)_normal_\d*$/)?.[1];
+          if (items.length === 1 && String(variant) === String(product.variantId) && Number(items[0].quantity) === 1) found.push(hash);
         } else visit(group);
       }
     }
@@ -91,8 +92,8 @@ export function selectConflictForm(html, currentUrl, product) {
 }
 
 export class FunboxAppRedemption {
-  constructor({ dataDir, state, credentials, multi, coordinator, applyRuntimeConfig = async () => {}, apiFactory = options => playwrightRequest.newContext(options), now = Date.now, log = () => {} }) {
-    Object.assign(this, { dataDir, state, credentials, multi, coordinator, applyRuntimeConfig, apiFactory, now, log });
+  constructor({ dataDir, state, credentials, multi, coordinator, applyRuntimeConfig = async () => {}, apiFactory = options => playwrightRequest.newContext(options), now = Date.now, log = () => {}, onProduct = null, waitFor = ms=>new Promise(resolve=>setTimeout(resolve,ms)) }) {
+    Object.assign(this, { dataDir, state, credentials, multi, coordinator, applyRuntimeConfig, apiFactory, now, log, onProduct, waitFor });
     this.directory = path.join(dataDir, 'optional-tasks', 'funbox-app-redemption');
     this.data = { version: 1, enabled: false, startAt: START, jobs: [], events: [] };
     this.codes = []; this.timer = null; this.warmTimer = null; this.running = null; this.stopping = false; this.saveTail = Promise.resolve();
@@ -110,7 +111,7 @@ export class FunboxAppRedemption {
     } catch (e) { if (e.code !== 'ENOENT') throw fail('storage', '特別任務序號檔無法解密，已停止載入'); }
     for (const job of this.data.jobs) if (ACTIVE.has(job.status)) {
       job.status = job.intent ? 'unknown' : 'cart_review';
-      this.data.enabled = false;
+      this.data.enabled = Boolean(this.data.continuousRetry)&&this.data.enabled;
     }
     if (this.isReserved('C')) await this.reservation(true);
     await this.save(); this.schedule(); return this;
@@ -125,7 +126,7 @@ export class FunboxAppRedemption {
   isReserved(slot) { return slot === 'C' && (this.data.reserved || this.data.enabled || Boolean(this.running) || this.data.jobs.some(j => ACTIVE.has(j.status))); }
   status() {
     return { name: '方爸APP兌換', disabled: Boolean(this.disabled), enabled: this.data.enabled, reserved: this.isReserved('C'), running: Boolean(this.running), startAt: this.data.startAt,
-      nextRetryAt: this.data.nextRetryAt, accountSlot: 'C', exactTotal: 555, payment: 'seven_cod', protocolVerified: this.data.jobs.some(j => j.status === 'ordered'),
+      nextRetryAt: this.data.nextRetryAt, continuousRetry: Boolean(this.data.continuousRetry), accountSlot: 'C', exactTotal: 555, payment: 'seven_cod', protocolVerified: this.data.jobs.some(j => j.status === 'ordered'),
       jobs: this.data.jobs.map(({ id, productId, status, orderNumber, error, amount, steps = [] }) => ({ id, productId, productName: PRODUCTS.find(p => p.id === productId)?.name,
         status, orderNumber, error, amount, codeSaved: this.codes.some(c => c.id === id), steps })), events: this.data.events.slice(-80), csrf: this.csrf };
   }
@@ -177,17 +178,23 @@ export class FunboxAppRedemption {
     await this.event('啟用特別任務：C 專用，A／B 維持一般流程');
     await this.applyRuntimeConfig(); this.schedule(); return this.status();
   }
+  async reschedule(body) {
+    if(this.running || this.data.jobs.some(j=>ACTIVE.has(j.status)) || this.data.jobs.some(j=>j.status==='ordered'))throw fail('busy','目前有執行或已送單紀錄，不能變更時間');
+    const at=Date.parse(body.startAt);
+    if(!Number.isFinite(at)||at<Date.parse(START)||at<=this.now())throw fail('input','開始時間必須是開放之後的未來時間');
+    this.data.startAt=new Date(at).toISOString();if(body.continuousRetry===true)this.data.continuousRetry=true;await this.event('已更新特別任務開始時間（保留原序號、順序與啟用狀態）');this.schedule();return this.status();
+  }
   schedule() {
     clearTimeout(this.timer);
     clearTimeout(this.warmTimer);
-    if (!this.data.enabled || this.stopping || this.running || !this.data.jobs.some(j => j.status === 'queued') || this.data.jobs.some(j => ACTIVE.has(j.status))) return;
+    if (!this.data.enabled || this.stopping || this.running || !this.data.jobs.some(j => j.status === 'queued' || (this.data.continuousRetry && ACTIVE.has(j.status))) || (!this.data.continuousRetry && this.data.jobs.some(j => ACTIVE.has(j.status)))) return;
     const delay = Math.max(0, Math.max(Date.parse(this.data.startAt), Date.parse(this.data.nextRetryAt || '') || 0) - this.now());
     const warmDelay = Date.parse(this.data.startAt) - this.now() - 60000;
     if (warmDelay > 0) {
       this.warmTimer = setTimeout(() => { void this.preflight({ allowLogin: true }).catch(() => this.event('C 預熱檢查未完成，請查看登入狀態').catch(() => {})); }, Math.min(warmDelay, 2147483647));
       this.warmTimer.unref?.();
     }
-    this.timer = setTimeout(() => { this.running = this.run().catch(async () => { this.data.enabled = false; await this.event('特別任務停止：請查看逐筆狀態').catch(() => { this.log('【特別任務・C】紀錄保存失敗；停止此任務，保留帳號專用狀態'); }); }).finally(() => { this.running = null; this.schedule(); }); }, Math.min(delay, 2147483647));
+    this.timer = setTimeout(() => { this.running = this.run().catch(async () => { this.data.enabled = Boolean(this.data.continuousRetry)&&!this.stopping;this.data.nextRetryAt=new Date(this.now()+60000).toISOString(); await this.event(this.data.enabled?'特別任務暫時失敗，60秒後自動重新核對':'特別任務停止：請查看逐筆狀態').catch(() => { this.data.enabled=false;this.log('【特別任務・C】紀錄保存失敗；停止此任務，保留帳號專用狀態'); }); }).finally(() => { this.running = null; this.schedule(); }); }, Math.min(delay, 2147483647));
     this.timer.unref?.();
   }
   async stop() {
@@ -233,11 +240,12 @@ export class FunboxAppRedemption {
     }
   }
   async cart(api, product, job) {
-    let r = await this.checked(api, 'get', ORIGIN + '/cart', {}, job);
+    const urlToRead = job?.cartUrl && /^https:\/\/shop\.funbox\.com\.tw\/carts\/[a-z0-9]{32}\/?$/i.test(job.cartUrl) ? job.cartUrl : ORIGIN + '/cart';
+    let r = await this.checked(api, 'get', urlToRead, {timeout:15000}, job);
     if (!r.ok()) { await r.dispose(); throw fail('temporary', '購物車讀取暫時失敗'); }
     let html = await r.text(), url = r.url(); await r.dispose();
     if (/\/account\/index\/?$/.test(new URL(url).pathname) && load(html)('a[href*="/account/logout"]').length) return null;
-    if (!load(html)('#checkout-v3').length) {
+    if (/\/cart_conflict\/?$/.test(new URL(url).pathname) || !load(html)('#checkout-v3').length) {
       const selected = selectConflictForm(html, url, product);
       r = await this.checked(api, 'post', selected.url, { form: selected.form }, job);
       html = await r.text(); url = r.url(); await r.dispose();
@@ -289,12 +297,20 @@ export class FunboxAppRedemption {
     const raw = await response.json(); await response.dispose();
     const [product] = parseFunboxProductData([{ ...raw, url: productUrl }], productUrl);
     if (!product || !/APP兌換/.test(product.title) || !product.variantId) throw fail('product', '商品身份尚未確認');
-    if (!(product.stock > 0)) throw fail('sold_out', '官方明確無庫存，略過本筆');
+    if(this.onProduct)void Promise.resolve(this.onProduct(product)).catch(()=>this.log('APP 上架通知未完成，請查看活動紀錄'));
+    if (!(product.stock > 0)) {
+      if(this.now()<Date.parse(START)+30000)throw fail('not_published','開放初期庫存尚未就緒，至少隔一秒重新核對');
+      if(product.stock===null||product.stock===undefined)throw fail('temporary','庫存資料不完整，重新核對');
+      throw fail('sold_out', '官方明確無庫存，略過本筆');
+    }
     job.product = product;
     let contract = await this.cart(api, product, job);
-    if (contract) throw fail('cart', 'C 購物車已有商品；不混車、不刪既有商品');
+    if (contract && !(this.data.continuousRetry && job.addAttempted)) throw fail('cart', 'C 購物車已有商品；不混車、不刪既有商品');
     if (this.stopping) throw fail('stopped', '已停止，未加車');
+    if(!contract){
+    if(this.data.continuousRetry&&job.addAttempted){job.emptyReads=(job.emptyReads||0)+1;if(job.emptyReads<3)throw fail('temporary','加車回應不明，先連續重讀空車，不重複加車');}
     job.status = 'adding'; await this.save();
+    job.addAttempted=true;await this.save();
     let addUncertain = false;
     try {
       const add = await this.checked(api, 'post', ORIGIN + '/cart/add', { form: { id: product.variantId, quantity: '1', type: 'normal' }, headers: { 'X-Requested-With': 'XMLHttpRequest', Accept: 'application/json' } }, job);
@@ -302,6 +318,7 @@ export class FunboxAppRedemption {
     } catch { addUncertain = true; }
     contract = await this.cart(api, product, job);
     if (!contract) throw fail('cart', addUncertain ? '加車結果不明；保留 C，不重加' : '加車後未找到目標商品');
+    }
     job.cartUrl = contract.cartUrl; job.variantId = product.variantId; await this.save();
     if (this.stopping) throw fail('cart', '已停止派單；本筆已加車，保留現場');
     const headers = { 'X-CSRF-Token': contract.csrfToken, 'X-Requested-With': 'XMLHttpRequest', Origin: ORIGIN, Referer: contract.cartUrl, Accept: 'application/json' };
@@ -311,6 +328,7 @@ export class FunboxAppRedemption {
     const coupon = await search.json(); const searchOk = search.ok(); await search.dispose();
     if (!searchOk) throw fail('coupon', '序號查詢未完成，保留購物車供核對');
     if (coupon.err_msg || coupon.errMsg) {
+      if(this.data.continuousRetry)throw fail('temporary','官方暫未接受序號；保留本筆商品，退避後重新確認');
       await this.removeOwned(api, contract, job); throw fail('invalid_code', '官方明確回覆序號不可用，已只移除本筆商品');
     }
     if (normalizedCode(coupon.code) !== normalizedCode(code)) throw fail('coupon', '序號查詢回覆不符，未送單');
@@ -320,13 +338,13 @@ export class FunboxAppRedemption {
         coupon_free_shipping: 'false', apply_maximun_bonus: false, bonus_used: 0, shipping_fee: 0, shipping: {}, cart_type: 'order' }, headers }, job);
       await apply.text(); await apply.dispose();
     } catch { await this.event('序號套用回應不明，只重讀本車，不重送套用請求', job); }
-    contract = await this.cart(api, product, job); if (!contract) throw fail('coupon', '套用後無法讀取本車');
+    contract = await this.cart(api,product,job);if(!contract)throw fail('coupon','套用後暫未讀到本車，重新核對');
     const resetBonus = async () => {
       const r = await this.checked(api, 'post', contract.cartUrl + '/apply_bonus', { form: { bonus_used: '0', cart_type: 'order', apply_maximun_bonus: 'false' }, headers }, job);
       const body = await r.json(), ok = r.ok(); await r.dispose(); if (!ok || body.bonus_used !== 0) throw fail('bonus', '官網未確認紅利 0 點');
     };
     await resetBonus();
-    contract = await this.cart(api, product, job); assertRedemptionCoupon(contract, code);
+    contract = await this.waitForCoupon(api,product,job,code);
     const optionResponse = await this.checked(api, 'get', contract.cartUrl + '/shipping_rates_and_payment_method_items', { params: { bonus_used: 0, cart_type: 'order' }, headers }, job);
     const choices = await optionResponse.json(), optionsOk = optionResponse.ok(); await optionResponse.dispose();
     if (!optionsOk) throw fail('payment', '付款選項未讀取完成');
@@ -366,6 +384,13 @@ export class FunboxAppRedemption {
     const ok = r.ok(); await r.dispose(); if (!ok || await this.cart(api, job.product, job)) throw fail('cart', '本筆商品移除尚未確認');
     job.cartUrl = null;
   }
+  async waitForCoupon(api,product,job,code){
+    let last;
+    for(let attempt=0;attempt<(this.data.continuousRetry?6:1);attempt++){
+      try{const c=await this.cart(api,product,job);if(!c)throw fail('coupon','套用後無法讀取本車');assertRedemptionCoupon(c,code);return c;}
+      catch(error){last=error;if(error.code==='cooldown'||this.stopping)throw error;if(attempt<5&&this.data.continuousRetry){await this.event('等待官方優惠與價格重新計算；先重讀、不重送訂單',job);await this.waitFor(Math.min(1000*(attempt+1),3000));}}
+    }throw last;
+  }
   async reconcileJob(api, job) {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
@@ -381,28 +406,32 @@ export class FunboxAppRedemption {
         await this.publish(job, { ...safe, status: 'ordered', specialTask: true });
         await this.event('特別任務訂單成立，已核對正式單號、商品、數量、門市與 555 元', job, { orderNumber: safe.orderNumber });
         return true;
-      } catch { if (attempt === 0) await new Promise(resolve => setTimeout(resolve, 1000)); }
+      } catch { if (attempt === 0) await this.waitFor(1000); }
     }
-    job.status = 'unknown'; this.data.enabled = false;
+    job.status = 'unknown'; this.data.enabled = Boolean(this.data.continuousRetry)&&!this.stopping;
+    if(this.data.enabled)this.data.nextRetryAt=new Date(this.now()+2000).toISOString();
     await this.publish(job, { status: 'submitted_unconfirmed', detail: '特別任務送單不明，只查單、不重送、不清車' });
     return false;
   }
   async run() {
     if (this.now() < Date.parse(this.data.startAt) || !this.data.enabled || Date.parse(this.data.nextRetryAt || '') > this.now()) return;
-    if (this.now() > Date.parse(this.data.startAt) + 30 * 60000) { this.data.enabled = false; await this.event('兌換執行時段已結束，未執行項目保留；C 保持專用至手動停用'); return; }
+    if (!this.data.continuousRetry && this.now() > Date.parse(this.data.startAt) + 30 * 60000) { this.data.enabled = false; await this.event('兌換執行時段已結束，未執行項目保留；C 保持專用至手動停用'); return; }
     return this.withLock(async () => {
       const api = await this.context();
       try {
         await this.member(api, { allowLogin: true });
         for (const job of this.data.jobs) {
-          if (!this.data.enabled || this.stopping || ACTIVE.has(job.status)) break;
+          if (!this.data.enabled || this.stopping || (!this.data.continuousRetry&&ACTIVE.has(job.status))) break;
+          if(this.data.continuousRetry&&job.status==='unknown'){if(!await this.reconcileJob(api,job))break;}
+          if(this.data.continuousRetry&&['adding','coupon_applying','cart_review'].includes(job.status))job.status='queued';
           if (job.status !== 'queued') continue;
           if (this.multi.accountIdentity('C') !== this.data.accountIdentity) throw fail('identity', '帳號 C 已變更');
           try { await this.redeem(api, job); }
           catch (error) {
             job.error = error.code || error.purchaseStatus || 'unexpected';
-            if (job.intent) { job.status = 'unknown'; this.data.enabled = false; await this.publish(job, { status: 'submitted_unconfirmed', detail: '特別任務送單後未確認，保留帳號保護' }); }
-            else if (['invalid_code', 'sold_out'].includes(error.code)) job.status = 'skipped';
+            if (job.intent) { job.status = 'unknown'; this.data.enabled = Boolean(this.data.continuousRetry)&&!this.stopping;if(this.data.enabled)this.data.nextRetryAt=new Date(this.now()+2000).toISOString(); await this.publish(job, { status: 'submitted_unconfirmed', detail: '特別任務送單後未確認，保留帳號保護並自動查單' }); }
+            else if (error.code==='sold_out'||(!this.data.continuousRetry&&error.code==='invalid_code')) job.status = 'skipped';
+            else if(this.data.continuousRetry){job.status=job.addAttempted?'cart_review':'queued';job.retryCount=(job.retryCount||0)+1;this.data.nextRetryAt=new Date(Math.max(this.now()+Math.min(1000*Math.pow(2,Math.min(job.retryCount-1,3)),8000),Date.parse(this.data.nextRetryAt||'')||0)).toISOString();await this.event('本筆自動退避後重新核對：'+job.error,job);break;}
             else if (['not_published', 'temporary','cooldown'].includes(error.code) && !job.cartUrl && job.status === 'queued') {
               this.data.nextRetryAt = new Date(Math.max(this.now() + 1000, Date.parse(this.data.nextRetryAt || '') || 0)).toISOString();
               await this.event(error.message, job); break;
@@ -453,7 +482,7 @@ export class FunboxAppRedemption {
       const body = JSON.parse(text || '{}');
       if (this.disabled) throw fail('input', '特別任務入口已移除');
       const action = pathname.slice(PREFIX.length + 1);
-      const result = action === 'edit' ? this.editableStatus() : action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
+      const result = action === 'edit' ? this.editableStatus() : action === 'reschedule' ? await this.reschedule(body) : action === 'save' ? await this.configure(body) : action === 'arm' ? await this.arm(body) : action === 'stop' ? await this.stop() : action === 'preflight' ? await this.preflight() : action === 'reconcile' ? await this.reconcile() : action === 'discard-cart' ? await this.discardCart(body) : action === 'remove-feature' ? await this.removeFeature(body) : null;
       if (!result) throw fail('input', '不存在的特別任務操作'); json(res, 200, result);
     } catch (e) { json(res, 400, { error: ['input','busy','hold','completed','confirmation','account','price','cart','pickup','login','storage'].includes(e.code) ? e.message : '特別任務操作未完成；請查看本機狀態', code: e.code || 'failed' }); }
     return true;

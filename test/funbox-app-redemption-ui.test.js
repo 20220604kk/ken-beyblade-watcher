@@ -57,3 +57,11 @@ test('特別任務介面：無效序號顯示儲存錯誤，不出現確認、�
   assert.equal(await page.locator('[data-confirmation]').isVisible(),false); assert.equal(calls.filter(c=>c.action==='arm').length,0);
  });
 });
+test('特別任務介面：10:00:05秒數經儲存與重新開啟仍保留',{timeout:20000},async()=>{
+ await fixture(async({page,calls})=>{
+  await page.locator('[data-time]').fill('2026-10-21T10:00:05');await page.locator('[data-save]').click();
+  await page.waitForFunction(()=>document.querySelector('[data-arm-reason]')?.textContent.includes('已儲存，可啟用'));
+  assert.equal(calls.find(c=>c.action==='save').body.startAt,'2026-10-21T10:00:05+08:00');
+  await page.locator('[data-close]').click();await page.getByRole('button',{name:'特別',exact:true}).click();assert.equal(await page.locator('[data-time]').inputValue(),'2026-10-21T10:00:05');
+ });
+});

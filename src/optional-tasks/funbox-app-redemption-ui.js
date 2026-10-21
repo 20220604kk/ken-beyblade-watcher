@@ -62,7 +62,7 @@ export function redemptionClient() {
     catch (e) { dialog.querySelector('[data-error]').textContent = e.message; return false; }
     finally { actionBusy = false; paint(); }
   }
-  function saveBody() { return { startAt: dialog.querySelector('[data-time]').value + ':00+08:00', rows: [...dialog.querySelectorAll('.funbox-special-job')].map(node => ({ id: node.dataset.id || undefined, productId: node.querySelector('select').value, code: node.querySelector('input').value })) }; }
+  function saveBody() { const time=dialog.querySelector('[data-time]').value; return { startAt: time + (time.length===16?':00':'') + '+08:00', rows: [...dialog.querySelectorAll('.funbox-special-job')].map(node => ({ id: node.dataset.id || undefined, productId: node.querySelector('select').value, code: node.querySelector('input').value })) }; }
   function cancelConfirmation() { pendingConfirmation = undefined; dialog.querySelector('[data-confirmation]').hidden = true; paint(); }
   function askConfirmation(text, name, body) {
     if (actionBusy) return;
@@ -82,6 +82,7 @@ export function redemptionClient() {
       dialog.querySelector('[data-confirm-yes]').onclick = () => { const selected = pendingConfirmation; cancelConfirmation(); if(selected)void action(selected.name,selected.body); };
       dialog.querySelector('[data-confirm-no]').onclick = cancelConfirmation;
       dialog.querySelector('[data-time]').oninput = () => { dirty=true; paint(); };
+      dialog.querySelector('[data-time]').step='1';
       dialog.querySelector('[data-add]').onclick = () => { dialog.querySelector('[data-jobs]').append(row()); dirty = true; renumber(); paint(); };
       dialog.querySelector('[data-save]').onclick = () => action('save', saveBody());
       dialog.querySelector('[data-arm]').onclick = async () => {
@@ -96,7 +97,7 @@ export function redemptionClient() {
       dialog.oncancel = () => cancelConfirmation();
       (document.querySelector('.funbox-purchase-panel') || document.body).append(dialog);
     }
-    if (!dirty) { fill(); dialog.querySelector('[data-time]').value = new Date(Date.parse(latest.startAt) + 8*3600000).toISOString().slice(0,16); } dialog.showModal(); paint();
+    if (!dirty) { fill(); dialog.querySelector('[data-time]').value = new Date(Date.parse(latest.startAt) + 8*3600000).toISOString().slice(0,19); } dialog.showModal(); paint();
   }
   function mount() {
     if (latest?.disabled) return;
