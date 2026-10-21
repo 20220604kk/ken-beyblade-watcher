@@ -2044,7 +2044,8 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
           {timeout:settings.batchProducts?Math.max(1,Math.min(5000,buildUntil-Date.now())):12000}); }
         catch (cause) {
           if (cause.purchaseStatus === 'cart_unknown' || /timeout|timed out|ECONN|socket/i.test(String(cause.message))) {
-            const cart = await readFunboxCart(context);
+            const recoveryQuantity = candidate.quantity || settings.plannedQuantity || funboxPurchaseStrategy(candidate,settings).quantity;
+            const cart = await readFunboxCart(context,{expected:[...expected,{product:candidate,quantity:recoveryQuantity}]});
             const row = cart.items.find(item => item.type === 'normal' && item.variantId === String(candidate.variantId));
             const quantity = candidate.quantity || settings.plannedQuantity || funboxPurchaseStrategy(candidate,settings).quantity;
             if (!row || row.quantity!==quantity) throw cause;
@@ -2063,7 +2064,7 @@ export class FunboxPurchaseAdapter extends BrowserPurchaseAdapter {
       if (skippedProducts.length && !settings.batchAllowPartial) throw funboxPurchaseError('cart_conflict','合單不允許缺款，未送單');
       await emit({label:'購物車封箱',state:'success',reason:`本車 ${expected.length} 款；排除 ${skippedProducts.length} 款，重新核對正式結帳金額`});
       if (settings.action !== 'checkout' && !settings.verifyOnly) {
-        const cart = await readFunboxCart(context);
+        const cart = await readFunboxCart(context,{expected});
         if (reconcileFunboxCart(cart,expected).missing.length) throw funboxPurchaseError('cart_conflict','API 加車核對不一致');
         return {status:'carted',products:expected.map(i=>({...i.product,quantity:i.quantity})),transport:'http_api',quantity:expected.reduce((s,i)=>s+i.quantity,0),resultUrl:cart.cartUrl,detail:'API 加車已確認，未送單',durationMs:Date.now()-started,timings:{steps}};
       }

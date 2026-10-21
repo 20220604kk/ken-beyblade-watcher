@@ -63,7 +63,24 @@ export function parseFunboxCartHtml(html, url) {
 // Follow only the official cart redirect chain. A current /cart -> home redirect
 // is not sufficient alone. The observed empty redirect is /account/index and
 // is accepted only after confirming the authenticated member page.
-export async function readFunboxCart(context, { timeout = 5000 } = {}) {
+export function selectFunboxExpectedCart(html,currentUrl,expected) {
+  const $=load(html), wanted=new Map(expected.map(i=>[String(i.variantId||i.product?.variantId||''),Number(i.quantity)]));
+  if(!wanted.size||wanted.size!==expected.length||[...wanted].some(([id,qty])=>!/^\d+$/.test(id)||!Number.isInteger(qty)||qty<1))throw new FunboxCartError('目標車商品識別不完整');
+  const node=$('#checkout-v3[data-react-props]');let props;try{props=JSON.parse(node.attr('data-react-props'));}catch{throw new FunboxCartError('多車資料無法解析');}
+  const found=[];
+  function visit(value){if(!value||typeof value!=='object')return;for(const [hash,group] of Object.entries(value)){
+    if(Array.isArray(group)&&Array.isArray(group[0])&&Array.isArray(group[1])){
+      const items=group[0],ids=items.map(i=>String(i.variant_id??String(i.id||'').match(/^(\d+)_normal_\d*$/)?.[1]??''));
+      if(items.length===wanted.size&&new Set(ids).size===wanted.size&&items.every((i,n)=>(!i.type||i.type==='normal')&&wanted.get(ids[n])===Number(i.quantity)))found.push(hash);
+    }else visit(group);
+  }}visit(props.conflictCartsGroups);
+  const csrf=$('meta[name="csrf-token"]').attr('content'),token=props.cart?.token;
+  if(found.length!==1||!csrf||!/^[a-z0-9]{32}$/i.test(token||''))throw new FunboxCartError('沒有唯一符合本次品項及數量的購物車，其他車保持不變');
+  if(new URL(currentUrl).origin!==ORIGIN)throw new FunboxCartError('多車來源不是官方網站');
+  return{url:ORIGIN+'/carts/'+token+'/checkout_no_conflict',form:{cart_hash:found[0],authenticity_token:csrf,...(props.selectedTemperatureType?.type?{selected_temperature:props.selectedTemperatureType.type}:{})}};
+}
+
+export async function readFunboxCart(context, { timeout = 5000, expected = [] } = {}) {
   let url = ORIGIN + '/cart';
   let emptyRedirect = false;
   const visited = new Set();
@@ -82,11 +99,21 @@ export async function readFunboxCart(context, { timeout = 5000 } = {}) {
       if (target.origin !== ORIGIN) throw new FunboxCartError('Funbox 購物車重新導向至非官方網站');
       if (/^\/account\/login/i.test(target.pathname)) throw new FunboxCartError('Funbox 購物車需要重新登入', 'login_required');
       emptyRedirect = target.pathname === '/account/index' && !target.search;
-      if (!emptyRedirect && !/^\/carts\/[a-z0-9]{32}\/?$/i.test(target.pathname)) throw new FunboxCartError('Funbox 購物車回傳未識別的重新導向');
+      if (!emptyRedirect && !/^\/carts\/[a-z0-9]{32}\/?$/i.test(target.pathname)
+        && !(expected.length&&/^\/carts\/[a-z0-9]{32}\/cart_conflict\/?$/i.test(target.pathname))) throw new FunboxCartError('Funbox 購物車回傳未識別的重新導向');
       url = target.href;
       continue;
     }
     if (status !== 200) throw new FunboxCartError(`Funbox 購物車讀取失敗（HTTP ${status}）`);
+    if(expected.length&&/\/cart_conflict\/?$/.test(new URL(url).pathname)){
+      const selection=selectFunboxExpectedCart(body,url,expected);
+      const selected=await context.request.post(selection.url,{form:selection.form,timeout,maxRedirects:3});
+      const selectedBody=await readAndReleaseResponse(selected);
+      if(!selected.ok())throw new FunboxCartError('官方尚未確認本次選車');
+      const snapshot=parseFunboxCartHtml(selectedBody,selected.url());
+      if(reconcileFunboxCart(snapshot,expected).missing.length)throw new FunboxCartError('選車後品項未核對一致');
+      return snapshot;
+    }
     if (emptyRedirect) {
       const dom = load(body);
       const loggedIn = dom('a[href*="/account/logout"], form[action*="/account/logout"]').length > 0;

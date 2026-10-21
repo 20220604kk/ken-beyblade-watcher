@@ -125,7 +125,7 @@ export function parseFunboxOrderReceipt(html, url) {
 export async function prepareFunboxAtmCheckout({ api, expected, deliveryProfile, pickupProfile, pickupSetup,
   payment='virtual_atm_home',allowLinepayFallback=false,maxTotal = Infinity, onStep = () => {} }) {
   await onStep({label:'讀取並核對本次購物車',state:'start',reason:'確認商品與數量，避免把其他商品混入本次訂單'});
-  const initial = await readFunboxCart({ request: api });
+  const initial = await readFunboxCart({ request: api }, {expected});
   const result = reconcileFunboxCart(initial, expected);
   if (result.missing.length) throw error('FUNBOX API 核對缺少目標商品', 'cart_conflict');
   await onStep({label:'購物車商品核對完成',state:'success',reason:expected.map(i=>`${i.product.title} ×${i.quantity}`).join('、')+'；下一步讀取官方結帳資料'});

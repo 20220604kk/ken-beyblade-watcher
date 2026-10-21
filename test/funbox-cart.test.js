@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { clearFunboxCart, readFunboxCart, parseFunboxCartHtml, reconcileFunboxCart, assertFunboxCheckoutRows } from '../src/funbox-cart.js';
+import { clearFunboxCart, readFunboxCart, parseFunboxCartHtml, reconcileFunboxCart, assertFunboxCheckoutRows, selectFunboxExpectedCart } from '../src/funbox-cart.js';
 
 const cart = 'https://shop.funbox.com.tw/carts/' + 'a'.repeat(32);
 const item = (id = '111', quantity = 1, type = 'normal', collection_id = null) => ({ variant_id: id, quantity, type, collection_id });
@@ -11,6 +11,11 @@ function response(status, body = '', location = '') {
     headers: () => location ? { location } : {}, text: async () => body, async dispose() {} };
 }
 const nonempty = items => [response(302, '', cart), response(200, html(items))];
+const conflictHtml=(duplicate=false)=>{
+ const matching=[[{id:'111_normal_',quantity:1,title:'本次一般商品'}],['一般商品','normal']];
+ const groups={normal:[{target:matching},{existingApp:[[{id:'999_normal_',quantity:1,title:'【APP兌換】既有品'}],['APP','normal']]}]};if(duplicate)groups.normal.push({duplicate:matching});
+ return `<meta name="csrf-token" content="csrf-test"><div id="checkout-v3" data-react-props='${JSON.stringify({cart:{token:'a'.repeat(32)},conflictCartsGroups:groups})}'></div>`;
+};
 const empty = () => [response(302, '', '/account/index'), response(200, member)];
 function context(gets, post = async () => response(200, '{}')) {
   const calls = [];
@@ -20,6 +25,19 @@ function context(gets, post = async () => response(200, '{}')) {
     async post(url, options) { calls.push({ method: 'POST', url, options }); return post(url, options); }
   } };
 }
+test('一般下單多車：只選完整符合本次品項的車，保留帳號原有APP車，不清車不混單',async()=>{
+ const expected=[{product:{variantId:'111',title:'一般商品'},quantity:1}];
+ const ctx=context([response(302,'',cart),response(302,'',cart+'/cart_conflict'),response(200,conflictHtml())],async(url,options)=>{
+  assert.equal(url,cart+'/checkout_no_conflict');assert.equal(options.form.cart_hash,'target');
+  return{...response(200,html([item('111')])),url:()=>cart};
+ });
+ const selected=await readFunboxCart(ctx,{expected});assert.equal(selected.items.length,1);assert.equal(selected.items[0].variantId,'111');assert.equal(ctx.calls.filter(c=>c.method==='POST').length,1);
+});
+test('一般下單多車：匹配兩車或目標不符不猜選，未指定任務不自動選車',async()=>{
+ const expected=[{product:{variantId:'111'},quantity:1}];assert.throws(()=>selectFunboxExpectedCart(conflictHtml(true),cart+'/cart_conflict',expected));
+ assert.throws(()=>selectFunboxExpectedCart(conflictHtml(),cart+'/cart_conflict',[{product:{variantId:'222'},quantity:1}]));
+ const ctx=context([response(302,'',cart),response(302,'',cart+'/cart_conflict')]);await assert.rejects(()=>readFunboxCart(ctx));assert.equal(ctx.calls.filter(c=>c.method==='POST').length,0);
+});
 
 test('只解析官方購物車 JSON，不把推薦商品或整頁型號當成車內商品', () => {
   const state = parseFunboxCartHtml(html([item('111')]) + '<a href="/products/bx-09">222 BX-09</a>', cart);

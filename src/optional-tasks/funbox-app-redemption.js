@@ -431,7 +431,7 @@ export class FunboxAppRedemption {
             job.error = error.code || error.purchaseStatus || 'unexpected';
             if (job.intent) { job.status = 'unknown'; this.data.enabled = Boolean(this.data.continuousRetry)&&!this.stopping;if(this.data.enabled)this.data.nextRetryAt=new Date(this.now()+2000).toISOString(); await this.publish(job, { status: 'submitted_unconfirmed', detail: '特別任務送單後未確認，保留帳號保護並自動查單' }); }
             else if (error.code==='sold_out'||(!this.data.continuousRetry&&error.code==='invalid_code')) job.status = 'skipped';
-            else if(this.data.continuousRetry){job.status=job.addAttempted?'cart_review':'queued';job.retryCount=(job.retryCount||0)+1;this.data.nextRetryAt=new Date(Math.max(this.now()+Math.min(1000*Math.pow(2,Math.min(job.retryCount-1,3)),8000),Date.parse(this.data.nextRetryAt||'')||0)).toISOString();await this.event('本筆自動退避後重新核對：'+job.error,job);break;}
+            else if(this.data.continuousRetry){job.status=job.addAttempted?'cart_review':'queued';job.retryCount=(job.retryCount||0)+1;const pause=error.code==='not_published'?1000:Math.min(1000*Math.pow(2,Math.min(job.retryCount-1,3)),8000);this.data.nextRetryAt=new Date(Math.max(this.now()+pause,Date.parse(this.data.nextRetryAt||'')||0)).toISOString();await this.event('本筆自動退避後重新核對：'+job.error,job);break;}
             else if (['not_published', 'temporary','cooldown'].includes(error.code) && !job.cartUrl && job.status === 'queued') {
               this.data.nextRetryAt = new Date(Math.max(this.now() + 1000, Date.parse(this.data.nextRetryAt || '') || 0)).toISOString();
               await this.event(error.message, job); break;

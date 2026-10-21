@@ -178,3 +178,6 @@ test('持續重試：正式送單不明會持續自動查單，45分鐘後仍不
   clock.now+=45*60000;await task.run();assert.equal(task.data.enabled,true);assert.equal(counts().postCount,1);assert.equal(counts().addCount,1);
  },{timeout:true});
 });
+test('持續重試：未上架持續每秒核對，不隨失敗次數放慢到八秒',async()=>{
+ await harness(async({task,api,clock})=>{task.data.continuousRetry=true;const get=api.get;api.get=async url=>url.endsWith('.json')?response({},url,404):get(url);for(let i=0;i<3;i++){await task.run();assert.equal(Date.parse(task.data.nextRetryAt)-clock.now,1000);clock.now+=1000;}assert.equal(task.data.enabled,true);});
+});
