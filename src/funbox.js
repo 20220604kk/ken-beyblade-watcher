@@ -540,6 +540,7 @@ export class FunboxMonitor {
     this.onExcludedProduct = onExcludedProduct;
     this.sourceIntervalMs = sourceIntervalMs;
     this.cooldownUntil = 0;
+    this.sourceCooldowns = new Map();
     this.fetcher = fetcher;
     this.url = url;
     this.sources = Array.isArray(sources) && sources.length
@@ -663,7 +664,8 @@ export class FunboxMonitor {
 
   async fetchSource(source, { previousSeen = {} } = {}) {
     const startedAt = Date.now();
-    if(startedAt<this.cooldownUntil)return {...source,ok:false,fresh:false,products:[],productCount:0,durationMs:0,error:'HTTP 限流冷卻中',retryAfterMs:this.cooldownUntil-startedAt};
+    const cooldownUntil=Math.max(this.cooldownUntil,this.sourceCooldowns.get(source.id)||0);
+    if(startedAt<cooldownUntil)return {...source,ok:false,fresh:false,products:[],productCount:0,durationMs:0,error:'HTTP 限流冷卻中',retryAfterMs:cooldownUntil-startedAt};
     const cached = this.sourceCache.get(source.id);
     const intervalMs = this.sourceIntervalMs ? this.sourceIntervalMs(source,startedAt) : source.intervalMs;
     if (cached && intervalMs > 0 && startedAt - cached.fetchedAtMs < intervalMs) {
@@ -714,8 +716,10 @@ export class FunboxMonitor {
         if([429,503].includes(response.status)){
           const raw=response.headers.get('retry-after');const seconds=Number(raw);
           const retryAt=raw&&Number.isFinite(seconds)?Date.now()+seconds*1000:Date.parse(raw||'');
-          this.cooldownUntil=Math.max(this.cooldownUntil,Date.now()+60000,Number.isFinite(retryAt)?retryAt:0);
-          throw Object.assign(new Error(`HTTP ${response.status}，遵守限流冷卻`),{retryAfterMs:this.cooldownUntil-Date.now()});
+          const until=Math.max(Date.now()+60000,Number.isFinite(retryAt)?retryAt:0);
+          if(response.status===429||raw)this.cooldownUntil=Math.max(this.cooldownUntil,until);
+          else this.sourceCooldowns.set(source.id,until);
+          throw Object.assign(new Error(`HTTP ${response.status}，遵守限流冷卻`),{retryAfterMs:until-Date.now()});
         }
         throw new Error(`HTTP ${response.status}`);
       }
