@@ -3,8 +3,10 @@ export const AMAZON_PRE_SUBMIT_COOLDOWN_MS = 1000;
 
 // Only this persisted stage is proof that the FINAL order endpoint was not
 // entered. An unknown Buy Now navigation is not an unknown final order POST.
-export function canRecoverAmazonDirectIntent({ transaction: tx, asin, fastLane, submitted = false, raceState = '' }) {
-  return Boolean(fastLane && !submitted && tx && !tx.accounted && tx.route === 'direct_buy_now'
+export function canRecoverAmazonDirectIntent({ transaction: tx, asin, fastLane, submitted = false, raceState = '', stockWait = null }) {
+  const retainedAod = tx?.route === 'aod_fast' && stockWait?.asin === asin && stockWait.tx?.route === 'aod_fast'
+    && stockWait.tx?.phase === 'buy_now' && stockWait.tx?.startedAt === tx.startedAt;
+  return Boolean(fastLane && !submitted && tx && !tx.accounted && (tx.route === 'direct_buy_now' || retainedAod)
     && tx.phase === 'buy_now' && tx.asin === asin && tx.quantity === 1
     && !['granted', 'unknown', 'ordered'].includes(raceState));
 }

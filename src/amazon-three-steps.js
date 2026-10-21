@@ -23,6 +23,10 @@ export function amazonThreeSteps(events = []) {
       case 'product_evaluated':
         stage = '01'; action = event.result === 'qualified' ? '符合購買條件' : '等待可購商品'; status = event.result === 'qualified' ? '成功' : '等待'; break;
       case 'buy_now_click': stage = '01'; bought = true; action = '發現直接購買'; status = '成功'; break;
+      case 'add_to_cart': stage = '01'; bought = true; action = 'AOD 自營單品加車'; status = '執行中'; break;
+      case 'checkout_prime_decline': stage = '02'; action = '拒絕 Prime 試用，接續結帳'; status = '執行中'; break;
+      case 'checkout_render': stage = '02'; action = '接續官方結帳頁'; status = '檢查中'; break;
+      case 'checkout_item_continue': stage = '02'; action = '核對單品數量後續行'; status = '執行中'; break;
       case 'pre_submit_retry': stage = '02'; submitted = false; action = `尚未送單，${Math.ceil((event.retryDelayMs || 0) / 1000)}秒後重試（連續失敗${event.retryCount || 1}次）`; status = '等待'; break;
       case 'api_add_cart': case 'add_cart_click': stage = '01'; action = '舊加車流程，非直接購買'; status = '執行中'; break;
       case 'api_cart_resume': stage = '01'; action = '舊購物車待核對'; status = '待核對'; break;
@@ -32,7 +36,7 @@ export function amazonThreeSteps(events = []) {
       case 'api_checkout_entry': case 'proceed_checkout': case 'checkout_inspect': case 'checkout_continue':
         stage = '02'; action = '讀取安全結帳'; status = '檢查中'; break;
       case 'checkout_browser_entry': stage = '02'; action = '啟用背景瀏覽器結帳入口'; status = '執行中'; break;
-      case 'checkout_stock_wait': stage = '02'; action = '紅字頁等回流，每秒重查（不重加／不送數量0）'; status = '等待'; break;
+      case 'checkout_stock_wait': stage = '02'; action = '紅字頁等回流，250ms 循序重查（不重加／不送數量0）'; status = '等待'; break;
       case 'checkout_cart_empty': stage = '02'; action = '購物車已空，回商品頁等新報價'; status = '等待'; break;
       case 'checkout_verified': stage = '02'; action = '發現購買按鈕'; status = '成功'; break;
       case 'submit_order': stage = '02'; submitted = true; action = '送出訂單'; status = '執行中'; break;

@@ -13,6 +13,7 @@ function fixture(t, {slot='A',history='signin',productIssue='',buyIssue='',final
     const path=new URL(url).pathname;calls.push({path,method:options.method||'GET'});
     let html='',status=200,headers={},issue='';
     if(path.startsWith('/dp/')){html=product({available});issue=productIssue;}
+    else if(path.includes('aodAjaxMain'))html='<div id="aod-container"><h1 id="aod-asin-title-text">BEYBLADE X BX-40</h1><div id="aod-offer-list">現在在庫切れ</div></div>';
     else if(path.includes('order-history')){html='<h1>No orders</h1>';issue=history;}
     else if(path.includes('/cart/view')){html='<div id="sc-active-cart"><h1>Your Amazon Cart is empty</h1></div>';issue=cartIssue;}
     else if(path==='/checkout/entry/buynow'){html=review();issue=buyIssue;}

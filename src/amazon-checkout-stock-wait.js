@@ -19,6 +19,6 @@ export function amazonCheckoutStockState(page, asin) {
 export function amazonStockWaitUrl(value) {
   const url = new URL(value, ORIGIN);
   if (url.origin !== ORIGIN || url.username || url.password
-    || !/^\/checkout\/(?:entry\/(?:buynow|cart)|p\/[^/]+\/(?:spc|update-items|items))\/?$/.test(url.pathname)) throw Object.assign(new Error('紅字頁沒有可安全重查的官方結帳位址，保留待核對'), { code: 'AMAZON_CART_REVIEW' });
+    || !/^(?:\/checkout\/(?:entry\/(?:buynow|cart)|p\/[^/]+\/(?:spc|update-items|items|itemselect))\/?|\/gp\/buy\/spc\/handlers\/display\.html)$/.test(url.pathname)) throw Object.assign(new Error('紅字頁沒有可安全重查的官方結帳位址，保留待核對'), { code: 'AMAZON_CART_REVIEW' });
   return url.href;
 }

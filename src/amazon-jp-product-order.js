@@ -179,6 +179,7 @@ export class AmazonJpProductOrderMonitor {
 
   canRecoverPreSubmit(submitted = false) {
     return canRecoverAmazonDirectIntent({ transaction: this.storage().apiTransaction,
+      stockWait: this.storage().checkoutStockWait,
       asin: extractAmazonAsin(this.getConfig()?.targetUrl), fastLane: this.fastLaneEnabled() && this.transport() === 'api', submitted,
       raceState: this.raceCoordinator?.current(this.slot)?.routes.api?.state });
   }
@@ -417,7 +418,7 @@ export class AmazonJpProductOrderMonitor {
             accountText: text('#nav-link-accountList-nav-line-1, #nav-link-accountList .nav-line-1'),
             priceText: prices.map(text).find((value) => value.trim()) || '',
             merchantValues: Array.from(document.querySelectorAll('input[name="merchantID"], input[name="merchantId"], input[name="offeringID.1"]'), (item) => `${item.name || ''}:${item.value || ''}`),
-            buyNowAvailable: visibleButton(['#buy-now-button', 'input[name="submit.buy-now"]']),
+            buyNowAvailable: visibleButton(['#buy-now-button', '#pre-order-button', '#preorder-button', 'input[name="submit.buy-now"]', '[name="submit.pre-order"]', '[name="submit.preorder"]']),
             addCartAvailable: visibleButton(['#add-to-cart-button', 'input[name="submit.add-to-cart"]'])
           };
         }),
@@ -469,6 +470,7 @@ export class AmazonJpProductOrderMonitor {
   async httpClient() {
     const context = await this.contextFor(!this.interactive);
     return this.httpClientFactory({ request: context.request, parallelPreflight: false, fastCheckout: this.fastLaneEnabled(), directBuyNow: this.fastLaneEnabled(),
+      retailFallbackEnabled: this.fastLaneEnabled(), stockWaitIntervalMs: 250,
       stockWaitEnabled: this.fastLaneEnabled(), stockWait: this.storage().checkoutAccessIssue ? null : this.storage().checkoutStockWait,
       onStockWait: async (value, { durable = true } = {}) => {
         if (value) { this.storage().checkoutStockWait = value; this.phase = 'stock_wait'; }
@@ -712,7 +714,7 @@ export class AmazonJpProductOrderMonitor {
   }
 
   async clickQualifiedOffer(page, snapshot) {
-    const buyNow = await firstVisible(page, ['#buy-now-button', 'input[name="submit.buy-now"]']);
+    const buyNow = await firstVisible(page, ['#buy-now-button', '#pre-order-button', '#preorder-button', 'input[name="submit.buy-now"]', '[name="submit.pre-order"]', '[name="submit.preorder"]']);
     if (buyNow) {
       await this.recordStep('buy_now_click', { asin: snapshot.asin, priceYen: snapshot.priceYen });
       await clickAndWaitForAmazonNavigation(page, buyNow);
@@ -780,6 +782,8 @@ export class AmazonJpProductOrderMonitor {
         apiClient = await this.httpClient();
         snapshot = this.fastLaneEnabled() && storage.checkoutStockWait?.asin === targetAsin && !storage.checkoutAccessIssue
           ? storage.checkoutStockWait.snapshot
+          : this.fastLaneEnabled() && typeof apiClient.readRetailOffer === 'function'
+          ? await apiClient.readRetailOffer(targetAsin)
           : this.fastLaneEnabled() && typeof apiClient.readDirectOffer === 'function'
           ? await apiClient.readDirectOffer(targetAsin) : await apiClient.readOffer(targetAsin);
       } else {
@@ -1170,6 +1174,8 @@ export class AmazonJpProductOrderMonitor {
     const { apiTransaction, checkoutStockWait, ...storage } = this.storage();
     return { slot: this.slot, ...this.getConfig(), ...storage, checkoutTransport: this.transport(),
       targetProduct: this.targetProduct(), fastLane: this.fastLaneEnabled(),
+      singleFlowVersion: 'extension-port-2026-10-22', stockWaitIntervalMs: 250,
+      checkoutFallback: this.fastLaneEnabled() ? 'aod_new_retail' : null,
       checkoutStockWait: checkoutStockWait ? { active: true, since: checkoutStockWait.since, refreshCount: checkoutStockWait.refreshCount } : null,
       checkoutEntryRoute: this.browserEntryFallbackActive() ? 'browser_fallback' : this.transport(),
       stepLog: [...this.stepLog], purchaseSteps: [...this.stepLog], refreshCount: this.refreshCount, signalChecks: [...this.signalChecks],

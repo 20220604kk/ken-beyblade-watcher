@@ -1,6 +1,7 @@
 import { load } from 'cheerio';
 import { AMAZON_HTTP_ORIGIN, parseAmazonDirectBuyForm } from './amazon-jp-http.js';
 import { clickAndWaitForAmazonNavigation } from './amazon-jp-single-order.js';
+import { AMAZON_BUY_SELECTOR } from './amazon-checkout-flow.js';
 
 // A new attempt after a proven pre-submit shell. Same account/context, fresh
 // product form, one native Buy Now. Never clicks Continue or Place Order.
@@ -42,11 +43,11 @@ export async function openAmazonBrowserDirectEntry(page, snapshot, { canContinue
       return { url: url.href, html, $, status };
     };
     await guard('product');
-    await page.waitForSelector('#buybox #buy-now-button, #desktop_buybox #buy-now-button', { state: 'visible', timeout: 3_000 }).catch(() => {});
+    await page.waitForSelector(AMAZON_BUY_SELECTOR, { state: 'visible', timeout: 3_000 }).catch(() => {});
     check();
     const product = await guard('product');
     parseAmazonDirectBuyForm(product, snapshot);
-    const button = page.locator('#buybox #buy-now-button, #desktop_buybox #buy-now-button').first();
+    const button = page.locator(AMAZON_BUY_SELECTOR).filter({ visible: true }).first();
     if (!await button.isVisible() || !await button.isEnabled()) throw new Error('商品頁立即購買按鈕不可操作');
     check();
     await clickAndWaitForAmazonNavigation(page, button);

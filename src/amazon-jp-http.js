@@ -3,6 +3,8 @@
 import { load } from 'cheerio';
 import { amazonCheckoutStockState, amazonStockWaitUrl } from './amazon-checkout-stock-wait.js';
 import { AMAZON_JP_SELLER_ID, extractModelCode, parseYen } from './amazon-jp-monitor.js';
+import { amazonBuyButton, amazonProductPrice, amazonCheckoutRenderUrl, amazonPrimeDecline,
+  amazonCartEntry, amazonSmartWagonEntry, amazonItemSelection } from './amazon-checkout-flow.js';
 
 export const AMAZON_HTTP_ORIGIN = 'https://www.amazon.co.jp';
 const ORDER_ID = /^\d{3}-\d{7}-\d{7}$/;
@@ -145,16 +147,16 @@ export function amazonOfferDecisionText(diagnostic = {}) {
 }
 
 export function parseAmazonDirectBuyForm(page, expected) {
-  const $ = page.$, button = $('#buybox #buy-now-button, #desktop_buybox #buy-now-button').first();
-  if (!button.length || button.is('[disabled],[aria-disabled="true"]') || button.attr('name') !== 'submit.buy-now') {
+  const $ = page.$, button = amazonBuyButton($);
+  if (!button.length) {
     throw fail('商品頁沒有可用的立即購買按鈕', 'AMAZON_DIRECT_BUY_UNAVAILABLE');
   }
-  const form = button.closest('form'), contract = amazonHttpForm(page, form, 'submit.buy-now');
+  const form = button.closest('form'), submitName = button.attr('name'), contract = amazonHttpForm(page, form, submitName);
   const merchant = contract.fields.get('merchantID');
   const asins = [contract.fields.get('ASIN'), contract.fields.get('items[0.base][asin]')].filter(Boolean);
   const quoteCurrency = contract.fields.get('items[0.base][customerVisiblePrice][currencyCode]');
   const quoteAmount = Number(contract.fields.get('items[0.base][customerVisiblePrice][amount]'));
-  const visiblePrice = parseYen(text($('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #corePrice_feature_div .a-price .a-offscreen').first().text()));
+  const visiblePrice = amazonProductPrice($, parseYen);
   const price = quoteCurrency === 'JPY' && quoteAmount > 0 ? quoteAmount : visiblePrice;
   let sameFreshOffer = false;
   try { sameFreshOffer = Boolean(expected.freshOfferId) && decodeURIComponent(contract.fields.get('offerListingID') || '') === decodeURIComponent(expected.freshOfferId); }
@@ -169,10 +171,12 @@ export function parseAmazonDirectBuyForm(page, expected) {
   if (contract.method !== 'POST' || !/^(?:\/gp\/product\/handle-buy-box\/[^?#]+|\/checkout\/entry\/buynow\/?$)/.test(new URL(contract.url).pathname)
     || !contract.fields.get('anti-csrftoken-a2z') || !contract.fields.get('offerListingID')
     || !asins.length || asins.some(asin => asin !== expected.asin) || !quantities.length || quantities.some(v => v !== '1')
-    || merchant !== AMAZON_JP_SELLER_ID || !isSeller($, sellerScope)
     || /中古|二手|非全新|Used|Renewed/i.test(text($('#buybox #condition, #buybox .condition').text()))
     || !priceConfirmed) throw fail('立即購買商品／賣家／價格或表單未核對，不改走加車', 'AMAZON_DIRECT_BUY_CONTRACT');
-  return { form, contract };
+  if (merchant !== AMAZON_JP_SELLER_ID || !isSeller($, sellerScope)) {
+    throw fail('主購買區未確認為 Amazon.co.jp 自營，可另讀 AOD 核對', 'AMAZON_DIRECT_BUY_SELLER');
+  }
+  return { form, contract, submitName };
 }
 
 export function amazonOrderIdFromCompletion(page) {
@@ -355,7 +359,7 @@ export function matchesAmazonOfficialDetail(page, orderId, expected) {
 
 export class AmazonJpHttpClient {
   constructor({ request, recordStep = async () => {}, checkpoint = async () => {}, canContinue = () => true, parallelPreflight = false, fastCheckout = false, directBuyNow = false, idleOrderBaseline = null, captureEvidence = () => {}, authorizeFinalSubmit = async () => {}, browserDirectEntry = null,
-    stockWaitEnabled = false, stockWait = null, onStockWait = async () => {}, waitFor = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+    stockWaitEnabled = false, stockWaitIntervalMs = 1000, retailFallbackEnabled = false, stockWait = null, onStockWait = async () => {}, waitFor = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
     this.transport = request;
     this.recordStep = recordStep;
     this.checkpoint = checkpoint;
@@ -371,7 +375,8 @@ export class AmazonJpHttpClient {
     this.captureEvidence = captureEvidence;
     this.checkoutEvidenceStarted = false;
     this.checkoutTrace = [];
-    Object.assign(this, { stockWaitEnabled, stockWait, onStockWait, waitFor });
+    Object.assign(this, { stockWaitEnabled, stockWait, onStockWait, waitFor, retailFallbackEnabled });
+    this.stockWaitIntervalMs = Math.min(1000, Math.max(250, Number(stockWaitIntervalMs) || 1000));
   }
 
   beginCheckoutEvidence(page) {
@@ -402,7 +407,7 @@ export class AmazonJpHttpClient {
     const requestPath = new URL(url, AMAZON_HTTP_ORIGIN).pathname;
     const requestScope = /order-history|\/your-orders\/orders/.test(requestPath) ? 'order_history'
       : /order-details/.test(requestPath) ? 'order_detail'
-        : /\/checkout\/|\/gp\/buy\/|handle-buy-box/.test(requestPath) ? 'checkout'
+        : /\/checkout\/|\/gp\/buy\/|handle-buy-box|\/prime\/handler(?:\/|$)/.test(requestPath) ? 'checkout'
           : /\/gp\/cart\/|^\/cart(?:\/|$)/.test(requestPath) ? 'cart'
             : /\/dp\/|\/gp\/product\/|aodAjaxMain/.test(requestPath) ? 'product' : 'other';
     try {
@@ -489,16 +494,33 @@ export class AmazonJpHttpClient {
     parsed.snapshot.diagnostic.responseMs = page.durationMs;
     parsed.snapshot.diagnostic.quoteMs = Math.round(performance.now() - started);
     this.offerPage = page; this.offer = parsed.offer;
+    this.offerSnapshot = parsed.snapshot; this.offerAt = Date.now();
     return parsed.snapshot;
+  }
+
+  async readRetailOffer(asin) {
+    const started = performance.now();
+    let direct;
+    try { direct = await this.readDirectOffer(asin); }
+    catch (error) {
+      if (!this.retailFallbackEnabled || error.code !== 'AMAZON_DIRECT_BUY_SELLER') throw error;
+    }
+    if (!this.retailFallbackEnabled || direct?.buyNowAvailable || direct?.pageIssue || direct?.purchaseLimited) return direct;
+    // AOD is a second website read only when the main Buy Box is unsuitable.
+    // Its selected contract remains account-local and must be used this round.
+    const snapshot = this.directAodProbe || await this.readOffer(asin);
+    snapshot.offerSource = 'aod'; snapshot.diagnostic.route = 'aod_fallback';
+    snapshot.diagnostic.quoteMs = Math.round(performance.now() - started);
+    return snapshot;
   }
 
   async readDirectOffer(asin) {
     if (!/^[A-Z0-9]{10}$/.test(asin)) throw fail('日亞 ASIN 格式無效');
-    this.directProductPage = null; this.directProductSnapshot = null;
+    this.directProductPage = null; this.directProductSnapshot = null; this.directAodProbe = null;
     const started = performance.now();
     const page = await this.request(`/dp/${asin}?m=${AMAZON_JP_SELLER_ID}&language=ja_JP&currency=JPY`);
     const productReadAt = Date.now();
-    const $ = page.$, button = $('#buybox #buy-now-button, #desktop_buybox #buy-now-button').first();
+    const $ = page.$, button = amazonBuyButton($);
     const title = text($('#productTitle').first().text());
     const snapshot = { url: page.url, asin, title, code: extractModelCode(title),
       priceYen: null, priceText: '', sellerConfirmed: false, purchaseLimited: stockLimited(bodyText($)),
@@ -507,16 +529,17 @@ export class AmazonJpHttpClient {
       diagnostic: { httpStatus: page.status, hasProductTitle: Boolean(title), transport: 'api',
         route: 'direct_product', decision: 'no_direct_buy_button', responseMs: page.durationMs } };
     if (button.length && !button.is('[disabled],[aria-disabled="true"]')) {
-      const contract = amazonHttpForm(page, button.closest('form'), 'submit.buy-now');
+      const contract = amazonHttpForm(page, button.closest('form'), button.attr('name'));
       const currency = contract.fields.get('items[0.base][customerVisiblePrice][currencyCode]');
       const amount = Number(contract.fields.get('items[0.base][customerVisiblePrice][amount]'));
       let price = currency === 'JPY' && amount > 0 ? amount
-        : parseYen(text($('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #corePrice_feature_div .a-price .a-offscreen').first().text()));
+        : amazonProductPrice($, parseYen);
       let freshOfferId;
       // Only ambiguous display currency needs an AOD quote. Ordinary JPY
       // product pages need a single GET, not AOD then the same product GET.
       if (!(price > 0)) {
         const aod = await this.readOffer(asin);
+        this.directAodProbe = aod;
         if (aod.sellerConfirmed && aod.priceYen > 0) {
           price = aod.priceYen;
           freshOfferId = this.offer?.contract?.fields.get('items[0.base][offerListingId]');
@@ -537,10 +560,10 @@ export class AmazonJpHttpClient {
   }
 
   async confirmOrder(transaction, { attempts = 2 } = {}) {
-    if (transaction.route === 'direct_buy_now' && transaction.phase === 'confirmed' && ORDER_ID.test(transaction.orderId || '')) {
+    if (['direct_buy_now', 'aod_fast'].includes(transaction.route) && transaction.phase === 'confirmed' && ORDER_ID.test(transaction.orderId || '')) {
       return { status: 'ordered', snapshot: { orderId: transaction.orderId, url: `${AMAZON_HTTP_ORIGIN}/your-orders/order-details?orderID=${transaction.orderId}`, transport: 'api' } };
     }
-    if (transaction.route === 'direct_buy_now' && !Array.isArray(transaction.baselineOrderIds)) {
+    if (['direct_buy_now', 'aod_fast'].includes(transaction.route) && !Array.isArray(transaction.baselineOrderIds)) {
       // No pre-purchase history query on the direct path. Never misidentify an
       // older same-item order as this one when a completion response was lost.
       const confirmed = transaction.phase === 'confirmed' && ORDER_ID.test(transaction.orderId || '');
@@ -671,22 +694,23 @@ export class AmazonJpHttpClient {
     if (this.addAttempted || this.submitted) throw fail('日亞禁止重複直購或送單');
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不直購');
     if (this.stockWaitEnabled && this.stockWait?.asin === snapshot.asin) {
-      const tx = { ...this.stockWait.tx, phase: 'buy_now', route: 'direct_buy_now' };
+      const tx = { ...this.stockWait.tx, phase: 'buy_now', route: this.stockWait.tx.route || 'direct_buy_now' };
       await this.checkpoint(tx); this.addAttempted = true;
       this.checkoutEvidenceStarted = true;
       const page = await this.request(amazonStockWaitUrl(this.stockWait.url));
       this.emitEvidence('response', page, { source: '保留結帳頁的唯讀重查回應' });
-      const reviewPage = await this.waitAtCheckout(page, tx, snapshot);
+      const reviewPage = await this.advanceCheckout(await this.waitAtCheckout(page, tx, snapshot), tx);
       const review = parseAmazonHttpReview(reviewPage, tx);
       return { tx, reviewPage, review };
     }
+    if (snapshot.offerSource === 'aod' && this.retailFallbackEnabled) return this.prepareFastAodCheckout(snapshot);
     // Reuse only the exact snapshot and validated form obtained by THIS client
     // in the current round. Never reuse a previous poll/other ASIN/session.
     const reuse = this.directProductSnapshot === snapshot && this.directProductPage
       && Date.now() - this.directProductAt >= 0 && Date.now() - this.directProductAt <= 5_000;
     const productPage = reuse ? this.directProductPage
       : await this.request(`/dp/${snapshot.asin}?m=${AMAZON_JP_SELLER_ID}&language=ja_JP&currency=JPY`);
-    const { form } = parseAmazonDirectBuyForm(productPage, { ...snapshot,
+    const { form, submitName } = parseAmazonDirectBuyForm(productPage, { ...snapshot,
       freshOfferId: reuse ? this.directFreshOfferId : this.offer?.contract?.fields.get('items[0.base][offerListingId]') });
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不直購');
     const tx = { phase: 'buy_now', route: 'direct_buy_now', asin: snapshot.asin, title: snapshot.title,
@@ -711,7 +735,7 @@ export class AmazonJpHttpClient {
         this.lastCheckoutRequest = entryTrace.at(-1) || { url: reviewPage.url, method: 'GET', status: reviewPage.status, responseReceived: true };
         this.lastCheckoutResponse = reviewPage;
         this.checkoutTrace.push(...(entryTrace.length ? entryTrace : [this.lastCheckoutRequest]));
-      } else reviewPage = await this.sendForm(productPage, form, 'submit.buy-now');
+      } else reviewPage = await this.sendForm(productPage, form, submitName);
     }
     catch (error) {
       if (confirmationPath(this.lastCheckoutRequest?.url)) { this.submitted = true; tx.phase = 'submitted'; await this.checkpoint(tx); }
@@ -724,9 +748,94 @@ export class AmazonJpHttpClient {
     }
     if (!this.canContinue()) throw fail('日亞任務已停止，本次不送單');
     // Parse only this response: no cart entry, old orders, cleanup or page tour.
+    reviewPage = await this.advanceCheckout(reviewPage, tx);
     if (this.stockWaitEnabled) reviewPage = await this.waitAtCheckout(reviewPage, tx, snapshot);
+    reviewPage = await this.advanceCheckout(reviewPage, tx);
     const review = parseAmazonHttpReview(reviewPage, tx);
     return { tx, reviewPage, review };
+  }
+
+  async sendContract(page, contract) {
+    if (!this.canContinue()) throw fail('日亞任務已停止，本次不續行');
+    if (contract.method === 'GET') {
+      const url = new URL(contract.url);
+      for (const [k, v] of contract.fields) url.searchParams.append(k, v);
+      return this.request(url.href, { referer: page.url });
+    }
+    return this.request(contract.url, { method: 'POST', fields: contract.fields, referer: page.url });
+  }
+
+  async advanceCheckout(page, tx) {
+    const seen = new Set();
+    for (let hop = 0; hop < 6; hop++) {
+      if (/\/(?:gp\/buy\/thankyou\/|checkout\/.*(?:thank|confirmation))/.test(new URL(page.url).pathname)) {
+        this.submitted = true;
+        if (tx) { tx.phase = 'submitted'; await this.checkpoint(tx); }
+        throw fail('結帳續行意外出現完成頁，保留查單，不重試', 'AMAZON_UNEXPECTED_COMPLETION');
+      }
+      // Stock pages belong to the retained GET loop, never Continue/qty-zero.
+      if (amazonCheckoutStockState(page, '') !== 'other' || page.$('#spc-form').length) return page;
+      const decline = amazonPrimeDecline(page, amazonHttpForm);
+      const selection = tx ? amazonItemSelection(page, tx.asin, amazonHttpForm) : null;
+      const render = decline || selection ? null : amazonCheckoutRenderUrl(page);
+      // An item-selection page must pass identity/quantity checks before any
+      // continuation; a link to SPC cannot bypass those checks.
+      const isSelection = /\/checkout\/p\/[^/]+\/itemselect\/?$/.test(new URL(page.url).pathname);
+      const next = decline || selection || (!isSelection && render && render !== page.url ? { url: render, method: 'GET', fields: new URLSearchParams() } : null);
+      if (!next) return page;
+      const key = JSON.stringify([next.method, next.url, next.fields.toString()]);
+      if (seen.has(key)) throw fail('日亞結帳續行重複，保留待核對', 'AMAZON_CART_REVIEW');
+      seen.add(key);
+      await this.recordStep(decline ? 'checkout_prime_decline' : selection ? 'checkout_item_continue' : 'checkout_render', { step: 2 });
+      page = await this.sendContract(page, next);
+    }
+    throw fail('日亞結帳續行超過上限，保留待核對', 'AMAZON_CART_REVIEW');
+  }
+
+  async prepareFastAodCheckout(snapshot) {
+    const age = Date.now() - this.offerAt;
+    if (snapshot !== this.offerSnapshot || !this.offer || age < 0 || age > 5000
+      || this.offer.priceYen !== snapshot.priceYen || !snapshot.sellerConfirmed || snapshot.pageIssue || snapshot.purchaseLimited) throw fail('AOD 報價已過期或不是本輪自營表單', 'AMAZON_CART_REVIEW');
+    const fields = new URLSearchParams(this.offer.contract.fields);
+    if (fields.getAll('items[0.base][asin]').length !== 1 || fields.get('items[0.base][asin]') !== snapshot.asin
+      || fields.getAll('items[0.base][offerListingId]').length !== 1 || fields.getAll('anti-csrftoken-a2z').length !== 1
+      || [...fields.keys()].some(k => /^items\[(?!0\.base\])/.test(k))) throw fail('AOD 表單含重複或額外商品，保留待核對', 'AMAZON_CART_REVIEW');
+    fields.set('items[0.base][quantity]', '1');
+    const tx = { phase: 'adding', route: 'aod_fast', asin: snapshot.asin, title: snapshot.title,
+      code: snapshot.code, priceYen: snapshot.priceYen, quantity: 1, startedAt: new Date().toISOString() };
+    await this.checkpoint(tx);
+    if (!this.canContinue()) { await this.checkpoint(null); throw fail('日亞任務已停止，本次不加車'); }
+    this.addAttempted = true; this.beginCheckoutEvidence(this.offerPage);
+    await this.recordStep('add_to_cart', { step: 1, transport: 'api' });
+    // An unknown add stays locked. No pre-cart/history GET, no replay on timeout.
+    let page = await this.sendContract(this.offerPage, { ...this.offer.contract, fields });
+    this.emitEvidence('response', page, { source: 'AOD 官方加車回應' });
+    if (/\/(?:gp\/buy\/thankyou\/|checkout\/.*(?:thank|confirmation))/.test(new URL(page.url).pathname)) {
+      this.submitted = true; tx.phase = 'submitted'; await this.checkpoint(tx);
+      throw fail('加車後意外出現訂單完成頁，保留查單', 'AMAZON_UNEXPECTED_COMPLETION');
+    }
+    page = await this.advanceCheckout(page, tx);
+    let entry = amazonSmartWagonEntry(page, snapshot.asin, amazonHttpForm);
+    const isReview = Boolean(page.$('#spc-form').length);
+    const stock = amazonCheckoutStockState(page, snapshot.asin);
+    if (!entry && !isReview && stock === 'other') {
+      // Ordinary cart fallback verifies the exact offering and seller. Never
+      // delete or alter a pre-existing/mixed cart to make the fast path fit.
+      if (!exactTargetCart(parseAmazonHttpCart(page), snapshot.asin)) page = await this.request('/-/zh/gp/cart/view.html?ref_=nav_cart');
+      const cart = parseAmazonHttpCart(page);
+      if (!exactTargetCart(cart, snapshot.asin) || !cart.items[0].sellerConfirmed || !cartMatchesFreshOffer(page, this.offer)) {
+        throw fail('AOD 加車後購物車不是同一全新自營單品，保留待核對', 'AMAZON_CART_REVIEW');
+      }
+      entry = amazonCartEntry(page, amazonHttpForm);
+      if (!entry) throw fail('購物車沒有唯一可用的官方結帳入口', 'AMAZON_CART_REVIEW');
+    }
+    // Only a received safe checkout can be resumed after restart.
+    if (entry) page = await this.sendContract(page, entry);
+    tx.phase = 'buy_now'; await this.checkpoint(tx);
+    page = await this.advanceCheckout(page, tx);
+    if (this.stockWaitEnabled) page = await this.waitAtCheckout(page, tx, snapshot);
+    const reviewPage = await this.advanceCheckout(page, tx);
+    return { tx, reviewPage, review: parseAmazonHttpReview(reviewPage, tx) };
   }
 
   async waitAtCheckout(page, tx, snapshot) {
@@ -737,19 +846,21 @@ export class AmazonJpHttpClient {
         throw fail('重查結帳時出現完成頁，保留查單，不再刷新', 'AMAZON_UNEXPECTED_COMPLETION');
       }
       const state = amazonCheckoutStockState(page, tx.asin);
-      if (state === 'empty') {
+      const productReturned = /^\/(?:dp|gp\/product)\/[A-Z0-9]{10}(?:\/|$)/i.test(new URL(page.url).pathname)
+        && (page.$ || load(page.html || ''))('#productTitle').length;
+      if (state === 'empty' || productReturned) {
         await this.onStockWait(null); await this.checkpoint(null); this.stockWait = null;
         await this.recordStep('checkout_cart_empty', { step: 2 });
         throw fail('Amazon 購物車已空，回商品頁等待新報價', 'AMAZON_CHECKOUT_CART_EMPTY');
       }
       if (state === 'mismatch') throw fail('紅字頁商品與本次任務不符，保留待核對', 'AMAZON_CART_REVIEW');
       if (state !== 'stock_wait') return page;
-      const url = amazonStockWaitUrl(page.url);
+      const url = amazonStockWaitUrl(amazonCheckoutRenderUrl(page) || page.url);
       const previous = this.stockWait;
       this.stockWait = { asin: tx.asin, url, tx: { ...tx }, snapshot, since: previous?.since || new Date().toISOString(), refreshCount: count };
       await this.onStockWait(this.stockWait, { durable: !previous || previous.url !== url });
       if (count === 0 || count % 30 === 0) await this.recordStep('checkout_stock_wait', { step: 2, refreshCount: count, state: 'waiting' });
-      await this.waitFor(Math.max(0, 1000 - (Number(page.durationMs) || 0)));
+      await this.waitFor(Math.max(0, this.stockWaitIntervalMs - (Number(page.durationMs) || 0)));
       if (!this.canContinue()) throw fail('任務已停止，保留紅字頁位置，未送單', 'AMAZON_STOCK_WAIT_STOPPED');
       // Read-only refresh of the received page, not a replay of Buy Now.
       page = await this.request(url); count++;

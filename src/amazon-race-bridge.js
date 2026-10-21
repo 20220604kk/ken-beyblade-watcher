@@ -4,6 +4,7 @@ import { load } from 'cheerio';
 import { parseAmazonDirectBuyForm, parseAmazonHttpReview, amazonOrderIdFromCompletion } from './amazon-jp-http.js';
 import { parseYen, extractModelCode, extractAmazonAsin } from './amazon-jp-monitor.js';
 import { validateAmazonJpProductCheckout } from './amazon-jp-product-order.js';
+import { amazonBuyButton, amazonProductPrice } from './amazon-checkout-flow.js';
 
 const hash = value => createHash('sha256').update(String(value)).digest();
 const EXTENSION = /^chrome-extension:\/\/[a-p]{32}$/;
@@ -96,12 +97,11 @@ export class AmazonRaceBridge {
       const page = raceDocument(message);
       if (extractAmazonAsin(page.url) !== task.asin || !/\/(?:dp|gp\/product)\//.test(new URL(page.url).pathname)) throw new Error('商品分頁與任務不符');
       runtime.refreshCount++;
-      if (!page.$('#buybox #buy-now-button:not([disabled]), #desktop_buybox #buy-now-button:not([disabled])').length) {
+      if (!amazonBuyButton(page.$).length) {
         runtime.state = 'waiting'; this.coordinator.unavailable(slot); return { action: 'wait' };
       }
-      const priceText = page.$('#corePriceDisplay_desktop_feature_div .a-price .a-offscreen, #corePrice_feature_div .a-price .a-offscreen').first().text();
       const priceInput = page.$('[name="items[0.base][customerVisiblePrice][currencyCode]"]').first().val();
-      const price = priceInput === 'JPY' ? Number(page.$('[name="items[0.base][customerVisiblePrice][amount]"]').first().val()) : parseYen(priceText);
+      const price = priceInput === 'JPY' ? Number(page.$('[name="items[0.base][customerVisiblePrice][amount]"]').first().val()) : amazonProductPrice(page.$, parseYen);
       const title = text(page.$('#productTitle').text());
       if (!title || !Number.isSafeInteger(price) || price <= 0) return { action: 'wait' };
       parseAmazonDirectBuyForm(page, { asin: task.asin, priceYen: price });

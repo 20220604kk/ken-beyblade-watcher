@@ -3,7 +3,7 @@
 export async function amazonDomAction(command, expected = {}) {
   if (location.origin !== 'https://www.amazon.co.jp') throw new Error('非日亞官方分頁');
   const visible = node => node && !node.disabled && node.getAttribute('aria-disabled') !== 'true' && node.getClientRects().length > 0;
-  const buy = () => [...document.querySelectorAll('#buybox #buy-now-button, #desktop_buybox #buy-now-button')].find(visible);
+  const buy = () => [...document.querySelectorAll('#buybox #buy-now-button, #desktop_buybox #buy-now-button, #buybox #pre-order-button, #desktop_buybox #pre-order-button, #buybox #preorder-button, #desktop_buybox #preorder-button, #buybox [name="submit.pre-order"], #desktop_buybox [name="submit.pre-order"], #buybox [name="submit.preorder"], #desktop_buybox [name="submit.preorder"]')].find(visible);
   const submit = () => [...document.querySelectorAll('#spc-form [name="placeYourOrder1"], #spc-form #placeYourOrder input[type=submit], #spc-form #placeYourOrder button')].find(visible);
   const blocked = () => /\/ap\/(?:signin|mfa|challenge)|\/errors\/validateCaptcha/i.test(location.pathname)
     || !!document.querySelector('input[type=password], #captchacharacters, iframe[src*="captcha"]')

@@ -62,7 +62,8 @@ function fakeTransport({ addTimeout = false, submitTimeout = false, submitStatus
     const u = new URL(url), method = options.method || 'GET';
     calls.push({ path: u.pathname, method, fields: new URLSearchParams(options.data), options });
     let html = '', status = 200, headers = {};
-    if (u.pathname.includes('/aodAjaxMain/')) html = offerHtml(offerPatch);
+    if (u.pathname.includes('/aodAjaxMain/')) html = directPatch.disabled
+      ? '<div id="aod-container"><h1 id="aod-asin-title-text">BEYBLADE X BX-40</h1><div id="aod-offer-list">現在在庫切れ</div></div>' : offerHtml(offerPatch);
     else if (u.pathname.startsWith('/dp/')) html = directProductHtml(directPatch);
     else if (u.pathname === '/checkout/entry/buynow' || u.pathname.startsWith('/gp/product/handle-buy-box/')) {
       if (buyTimeout) throw new Error('fixture response lost');

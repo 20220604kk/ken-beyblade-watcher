@@ -15,7 +15,7 @@ export async function waitForAmazonProductReady(page, status = 200, timeoutMs = 
       if (/ページが見つかりません|何かお探しですか|Page Not Found|Sorry! Something went wrong|アクセスが集中/i.test(body)) return 'error_page';
       if (!text('#productTitle')) return false;
       if (/在庫切れ|現在お取り扱いできません|一時的に在庫切れ|Currently unavailable|Out of stock|暫無庫存|目前無貨|目前缺貨|目前無法購買/i.test(text('#availability'))) return 'unavailable';
-      const button = [...document.querySelectorAll('#buy-now-button, #add-to-cart-button, input[name="submit.buy-now"], input[name="submit.add-to-cart"]')]
+      const button = [...document.querySelectorAll('#buy-now-button, #pre-order-button, #preorder-button, #add-to-cart-button, [name="submit.pre-order"], [name="submit.preorder"], input[name="submit.buy-now"], input[name="submit.add-to-cart"]')]
         .find(element => !element.disabled && element.getAttribute('aria-disabled') !== 'true'
           && getComputedStyle(element).display !== 'none' && getComputedStyle(element).visibility !== 'hidden'
           && element.getClientRects().length > 0);
