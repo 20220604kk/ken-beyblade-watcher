@@ -540,6 +540,7 @@ export class FunboxMonitor {
     this.onExcludedProduct = onExcludedProduct;
     this.sourceIntervalMs = sourceIntervalMs;
     this.cooldownUntil = 0;
+    this.cooldownStatus = 429;
     this.sourceCooldowns = new Map();
     this.fetcher = fetcher;
     this.url = url;
@@ -664,8 +665,8 @@ export class FunboxMonitor {
 
   async fetchSource(source, { previousSeen = {} } = {}) {
     const startedAt = Date.now();
-    const cooldownUntil=Math.max(this.cooldownUntil,this.sourceCooldowns.get(source.id)||0);
-    if(startedAt<cooldownUntil)return {...source,ok:false,fresh:false,products:[],productCount:0,durationMs:0,error:'HTTP 限流冷卻中',retryAfterMs:cooldownUntil-startedAt};
+    const sourceCooldown=this.sourceCooldowns.get(source.id),cooldownUntil=Math.max(this.cooldownUntil,sourceCooldown?.until||0);
+    if(startedAt<cooldownUntil)return {...source,ok:false,fresh:false,products:[],productCount:0,durationMs:0,error:`HTTP ${this.cooldownUntil>=Number(sourceCooldown?.until||0)?this.cooldownStatus:sourceCooldown.status} 限流冷卻中`,retryAfterMs:cooldownUntil-startedAt};
     const cached = this.sourceCache.get(source.id);
     const intervalMs = this.sourceIntervalMs ? this.sourceIntervalMs(source,startedAt) : source.intervalMs;
     if (cached && intervalMs > 0 && startedAt - cached.fetchedAtMs < intervalMs) {
@@ -717,8 +718,8 @@ export class FunboxMonitor {
           const raw=response.headers.get('retry-after');const seconds=Number(raw);
           const retryAt=raw&&Number.isFinite(seconds)?Date.now()+seconds*1000:Date.parse(raw||'');
           const until=Math.max(Date.now()+60000,Number.isFinite(retryAt)?retryAt:0);
-          if(response.status===429||raw)this.cooldownUntil=Math.max(this.cooldownUntil,until);
-          else this.sourceCooldowns.set(source.id,until);
+          if(response.status===429||raw){this.cooldownUntil=Math.max(this.cooldownUntil,until);this.cooldownStatus=response.status;}
+          else this.sourceCooldowns.set(source.id,{until,status:response.status});
           throw Object.assign(new Error(`HTTP ${response.status}，遵守限流冷卻`),{retryAfterMs:until-Date.now()});
         }
         throw new Error(`HTTP ${response.status}`);
