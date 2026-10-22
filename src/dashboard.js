@@ -1168,7 +1168,7 @@ function renderAmazonProductOrder(s){
       const shortTitle=title.replace(/^タカラトミー[（(]TAKARA TOMY[）)]\\s*/i,'').replace(/^BEYBLADE X\\s*/i,'');
       const cooling=Date.parse(a.backoffUntil||'')>Date.now();
       const legacyHold=a.status==='needs_review'&&['adding','cart_ready','buy_now'].includes(a.apiTransactionStatus);
-      const state=a.running?(a.phase==='ordering'?'正在結帳':a.phase==='maintenance'?'待機整理':'檢查中'):a.interactive?'等待登入完成':legacyHold?'尚未送單，待核對':cooling?'降速等待':labels[a.status]||'待命';
+      const state=!a.enabled?(a.running?'停止中・等待本輪收尾':a.status==='needs_review'?'已停・交易待核對':'已停止'):a.running?(a.phase==='ordering'?'正在結帳':a.phase==='maintenance'?'待機整理':'檢查中'):a.interactive?'等待登入完成':legacyHold?'尚未送單，待核對':cooling?'降速等待':labels[a.status]||'待命';
       const decision=x.evaluation==='not_purchasable'&&x.diagnostic?.decision==='retail_contract_incomplete'?'自營加車欄位不完整，非判定售罄':reasons[x.evaluation]||x.evaluation;
       const cadence=a.mode==='hybrid'?(a.pollIntervalSeconds||5)+' 秒＋補貨訊號':'補貨訊號';
       const auxiliary=[a.checkoutStockWait?.active?(a.checkoutStockWait.suspended?'保留紅字頁・未執行刷新':'紅字頁等回流・250ms 循序重查'):null,({needs_login:'結帳需登入核對・商品監控持續',needs_verification:'結帳待人工驗證・商品監控持續'})[a.checkoutAccessIssue?.status],({needs_login:'背景查單需登入（獨立狀態）',needs_verification:'背景查單待驗證（獨立狀態）',unavailable:'背景查單暫不可用（獨立狀態）'})[a.orderHistoryCheck?.status],({needs_login:'待機清車需登入（獨立狀態）',needs_verification:'待機清車待驗證（獨立狀態）'})[a.idleCartMaintenance?.status]].filter(Boolean).join('｜');
@@ -1386,7 +1386,7 @@ async function amazonProductOrderAction(slot,work){
   }
 }
 async function toggleAmazonProductOrder(control,slot){
-  const payload=amazonProductOrderSettings(slot),previous=!control.checked;
+  const payload=control.checked?amazonProductOrderSettings(slot):{slot,enabled:false,stopOnly:true},previous=!control.checked;
   await amazonProductOrderAction(slot,async()=>{try{return await api('/japan/amazon-product-order/settings',payload);}catch(error){control.checked=previous;throw error;}});
 }
 async function saveAmazonProductOrderFields(slot){

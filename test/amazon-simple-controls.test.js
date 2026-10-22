@@ -60,6 +60,9 @@ test('ABC 啟動勾選直接送設定；欄位自存及重設一律先停止，�
     assert.equal(c.requests.at(-1).body.enabled,true);
     assert.equal(c.requests.at(-1).body.fastLane,true);
     assert.equal(c.requests.at(-1).body.mode,slot==='B'?'scan_signal':'hybrid');
+    checkbox.checked=false;
+    await c.toggleAmazonProductOrder(checkbox,slot);
+    assert.deepEqual(JSON.parse(JSON.stringify(c.requests.at(-1).body)),{slot,enabled:false,stopOnly:true});
     await c.saveAmazonProductOrderFields(slot);
     assert.equal(c.requests.at(-1).body.enabled,false);
     await c.resetAmazonProductOrderProgress(slot);

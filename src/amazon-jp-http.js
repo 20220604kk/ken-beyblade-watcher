@@ -358,12 +358,13 @@ export function matchesAmazonOfficialDetail(page, orderId, expected) {
 }
 
 export class AmazonJpHttpClient {
-  constructor({ request, recordStep = async () => {}, checkpoint = async () => {}, canContinue = () => true, parallelPreflight = false, fastCheckout = false, directBuyNow = false, idleOrderBaseline = null, captureEvidence = () => {}, authorizeFinalSubmit = async () => {}, browserDirectEntry = null,
+  constructor({ request, recordStep = async () => {}, checkpoint = async () => {}, canContinue = () => true, canSubmitAfterGrant = canContinue, parallelPreflight = false, fastCheckout = false, directBuyNow = false, idleOrderBaseline = null, captureEvidence = () => {}, authorizeFinalSubmit = async () => {}, browserDirectEntry = null,
     stockWaitEnabled = false, stockWaitIntervalMs = 1000, retailFallbackEnabled = false, stockWait = null, onStockWait = async () => {}, waitFor = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
     this.transport = request;
     this.recordStep = recordStep;
     this.checkpoint = checkpoint;
     this.canContinue = canContinue;
+    this.canSubmitAfterGrant = canSubmitAfterGrant;
     this.authorizeFinalSubmit = authorizeFinalSubmit;
     this.browserDirectEntry = browserDirectEntry;
     this.parallelPreflight = parallelPreflight === true;
@@ -887,6 +888,12 @@ export class AmazonJpHttpClient {
     if (!this.canContinue()) { tx.phase = 'buy_now'; await this.checkpoint(tx); throw fail('日亞任務已停止，本次不送單'); }
     try { await this.authorizeFinalSubmit(); }
     catch (error) { tx.phase = 'buy_now'; await this.checkpoint(tx); throw error; }
+    // Stop may arrive while the durable race grant is being written. A grant
+    // is not an order POST; recheck cancellation before crossing that boundary.
+    if (!this.canSubmitAfterGrant()) {
+      tx.phase = 'buy_now'; await this.checkpoint(tx);
+      throw fail('日亞任務已停止，本次不送單');
+    }
     this.submitted = true;
     let completed;
     try { completed = await this.sendForm(reviewPage, review.form, 'placeYourOrder1', review.overrides); }

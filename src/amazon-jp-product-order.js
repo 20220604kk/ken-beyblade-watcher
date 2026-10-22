@@ -487,6 +487,10 @@ export class AmazonJpProductOrderMonitor {
       // order-list entry to this API send; require this route's own completion.
       idleOrderBaseline: this.raceCoordinator?.connected(this.slot) || this.raceCoordinator?.current(this.slot) ? null : this.directIdleOrderBaseline,
       authorizeFinalSubmit: async () => { if (this.activeRaceLease) await this.raceCoordinator.grant(this.activeRaceLease); },
+      // A consumed grant may finish if its peer wins; user cancellation must
+      // still win while that grant is being persisted, before any order POST.
+      canSubmitAfterGrant: () => !this.stopped && Boolean(this.getConfig()?.enabled)
+        && extractAmazonAsin(this.getConfig()?.targetUrl) === this.storage().targetAsin,
       canContinue: () => !this.stopped && Boolean(this.getConfig()?.enabled)
         && extractAmazonAsin(this.getConfig()?.targetUrl) === this.storage().targetAsin
         && (!this.activeRaceLease || this.raceCoordinator.canContinue(this.activeRaceLease))
@@ -1175,6 +1179,7 @@ export class AmazonJpProductOrderMonitor {
     return { slot: this.slot, ...this.getConfig(), ...storage, checkoutTransport: this.transport(),
       targetProduct: this.targetProduct(), fastLane: this.fastLaneEnabled(),
       singleFlowVersion: 'extension-port-2026-10-22', stockWaitIntervalMs: 250,
+      stopWhileBusySupported: true,
       checkoutFallback: this.fastLaneEnabled() ? 'aod_new_retail' : null,
       checkoutStockWait: checkoutStockWait ? { active: true, since: checkoutStockWait.since, refreshCount: checkoutStockWait.refreshCount,
         suspended: Boolean(storage.checkoutAccessIssue) || !this.getConfig()?.enabled } : null,

@@ -3016,9 +3016,31 @@ const dashboard = createDashboard({
     const slot = String(body.slot || 'A').toUpperCase();
     const amazonJpProductOrder = amazonJpProductOrderBySlot[slot];
     if (!amazonJpProductOrder) throw new Error('日亞任務只能選擇 A、B、C');
-    amazonJpProductOrder.assertIdle();
     const enabled = Boolean(body.enabled);
     const current = config.amazonJpProductOrders[slot];
+    // Stopping is cancellation, not a settings edit. Older open dashboards
+    // send a full settings payload; accept it too when every value is unchanged.
+    const unchanged = Object.entries(body).every(([key, value]) => {
+      if (['slot', 'enabled', 'stopOnly'].includes(key)) return true;
+      if (key === 'targetUrl') return normalizeAmazonJpProductUrl(value || current.targetUrl) === current.targetUrl;
+      if (key === 'mode') return normalizeAmazonJpProductMode(value) === current.mode;
+      if (['targetSuccessCount', 'maxShippingYen', 'priceToleranceYen'].includes(key)) return Number(value) === Number(current[key]);
+      if (key === 'fastLane') return value === current.fastLane;
+      if (key === 'checkoutTransport') return value === current.checkoutTransport;
+      return false;
+    });
+    if (body.enabled === false && body.resetProgress !== true && (body.stopOnly === true || unchanged)) {
+      amazonJpProductOrder.stop();
+      current.enabled = false; // Synchronous: every pre-submit guard sees it now.
+      await saveConfig();
+      await amazonRaceCoordinator.cancel(slot); // Retains granted/unknown sends.
+      const draining = amazonJpProductOrder.running || amazonJpProductOrder.browserOperation;
+      if (!draining && !amazonJpProductOrder.interactive) await amazonJpProductOrder.closeBrowser();
+      log(`日亞商品頁任務 ${slot} 已停止排程；保留交易與購買進度。`, 'japan', { persist: false });
+      return { message: draining ? `日亞任務 ${slot} 已停止排程；本輪請求安全收尾中，不啟動新一輪。`
+        : `日亞任務 ${slot} 已停止；交易與購買進度保留。` };
+    }
+    amazonJpProductOrder.assertIdle();
     const targetUrl = normalizeAmazonJpProductUrl(body.targetUrl || current.targetUrl);
     const targetSuccessCount = Math.max(1, Math.min(99, Number(body.targetSuccessCount) || 1));
     const taskChanged = targetUrl !== current.targetUrl || targetSuccessCount !== current.targetSuccessCount;
