@@ -4331,15 +4331,23 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         this._markLoginProblem(esliteApiError(stored.reason || '會員 API 暫時無法確認', 'unknown'), 'unknown');
         return { ok: false, pending: false, message: this.lastVerifyError };
       }
-      try {
-        await this._recoverApiSession(); this._markLoginReady();
-        return { ok: true, message: '背景自動登入完成，已由會員 API 驗證並保存；未操作購物車。' };
-      } catch (error) {
-        if (error.purchaseStatus !== 'human_required' || !interactive) {
-          this._markLoginProblem(error, ['unknown', 'login_busy'].includes(error.purchaseStatus) ? 'unknown' : 'needs_login');
-          return { ok: false, pending: false, message: conciseAutomationError(error) };
+      const manualEntry = interactive && (this.manualLoginRequired || this.sessionRecoveryState === 'manual_required'
+        || Date.now() < this.sessionRecoveryAfterMs);
+      if (manualEntry) {
+        // A user clicking Login must be able to reach the official page while
+        // background recovery is paused. Do not reset the pause or auto-submit.
+        manualOnly = true;
+      } else {
+        try {
+          await this._recoverApiSession(); this._markLoginReady();
+          return { ok: true, message: '背景自動登入完成，已由會員 API 驗證並保存；未操作購物車。' };
+        } catch (error) {
+          if (error.purchaseStatus !== 'human_required' || !interactive) {
+            this._markLoginProblem(error, ['unknown', 'login_busy'].includes(error.purchaseStatus) ? 'unknown' : 'needs_login');
+            return { ok: false, pending: false, message: conciseAutomationError(error) };
+          }
+          // Only an actual official challenge/block opens a foreground window.
         }
-        // Only an actual official challenge/block opens a foreground window.
       }
     }
     await this._closeInteractiveLogin();

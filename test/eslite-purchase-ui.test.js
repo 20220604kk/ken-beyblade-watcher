@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import fs from 'node:fs/promises';
 import * as cheerio from 'cheerio';
 import { esliteTableCss, esliteAccountTableHtml, esliteOrderTablesHtml, esliteTableClient, esliteSheetTime,
   esliteSheetOutcome, esliteSheetRecords, esliteSheetOrderRowsHtml, renderEsliteTables,
@@ -9,6 +10,19 @@ import { esliteTableCss, esliteAccountTableHtml, esliteOrderTablesHtml, esliteTa
 const record = (extra = {}) => ({ platform: 'eslite', accountSlot: 'A', taskId: 'test-1',
   product: { id: 'one', title: '測試 UX-03' }, status: 'ordered', orderId: 'TEST-001',
   startedAt: '2026-10-08T05:32:16Z', payment: 'virtual_atm_home', quantity: 1, ...extra });
+
+test('登入操作回饋標註帳號，避免其他帳號舊冷卻訊息混淆', async () => {
+  const source = await fs.readFile(new URL('../src/dashboard.js', import.meta.url), 'utf8');
+  const code = source.slice(source.indexOf('async function testAutoPurchaseLogin('), source.indexOf('async function completeAutoPurchaseLogin('));
+  const state = {}, calls = [];
+  const sandbox = { document: { querySelector: () => state }, refresh: async () => {},
+    api: async (route, body) => { calls.push({ route, body }); return { message: '手動視窗已開啟' }; } };
+  vm.createContext(sandbox); vm.runInContext(code + ';this.login=testAutoPurchaseLogin;', sandbox);
+  for (const slot of ['B', 'C', 'D', 'E']) {
+    await sandbox.login('eslite', slot); assert.equal(state.textContent, '誠品帳號 ' + slot + '｜手動視窗已開啟');
+    assert.equal(calls.at(-1).body.accountSlot, slot);
+  }
+});
 
 test('manual recovery gate stays visible even when its old boolean flag is stale', () => {
   assert.equal(esliteAccountReadiness({}, { ready: true }, { manualLoginRequired: false,

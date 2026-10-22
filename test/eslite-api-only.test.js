@@ -294,6 +294,44 @@ test('手動入口不被背景冷卻擋住；忙碌時保留明確要求的專�
   } finally { await f.close(); }
 });
 
+for (const accountSlot of ['B', 'C', 'D', 'E']) test(`${accountSlot} 一般登入按鈕遇背景冷卻改開手動視窗，不重送帳密或清除冷卻`, async () => {
+  const f = await fixture({ accountSlot, autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: false, loggedIn: false }) });
+  let launches = 0, kept;
+  const context = { newPage: async () => ({}), close: async () => {} };
+  await f.adapter.localSessionLoad;
+  const deadline = Date.now() + 900000; f.adapter.sessionRecoveryAfterMs = deadline;
+  f.adapter._recoverApiSession = async () => assert.fail('manual click must not retry background credentials during cooldown');
+  f.adapter._loginContext = async headless => { assert.equal(headless, false); launches++; return context; };
+  f.adapter._login = async (_page, _context, options) => {
+    assert.equal(options.interactive, true); assert.equal(options.manualOnly, true);
+    throw Object.assign(Error('請自行登入'), { purchaseStatus: 'needs_login' });
+  };
+  f.adapter._keepInteractiveLogin = async options => { kept = options; return { ok: false, pending: true, message: '手動視窗已開啟' }; };
+  try {
+    const result = await f.adapter.testLogin();
+    assert.equal(result.pending, true); assert.equal(launches, 1); assert.equal(kept.keepOnBusy, true);
+    assert.equal(f.adapter.sessionRecoveryAfterMs, deadline); assert.equal(f.adapter.loginAttemptSubmitted, false);
+    assert.equal(f.adapter.accountSlot, accountSlot);
+  } finally { await f.close(); }
+});
+
+test('背景登入仍遵守冷卻，不因互動入口修正自行開視窗', async () => {
+  const f = await fixture({ autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: false, loggedIn: false }) });
+  await f.adapter.localSessionLoad; f.adapter.sessionRecoveryAfterMs = Date.now() + 900000;
+  f.adapter._loginContext = async () => assert.fail('background cooldown must not open browser');
+  try { const result = await f.adapter.testLogin({ interactive: false }); assert.equal(result.ok, false); assert.match(result.message, /冷卻/); }
+  finally { await f.close(); }
+});
+
+test('冷卻期間會員 API 已有效，登入按鈕直接確認，不重開瀏覽器或送帳密', async () => {
+  const f = await fixture({ autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: true, loggedIn: true }) });
+  await f.adapter.localSessionLoad; f.adapter.sessionRecoveryAfterMs = Date.now() + 900000;
+  f.adapter.manualLoginRequired = true;
+  f.adapter._loginContext = async () => assert.fail('valid API session needs no browser');
+  try { assert.equal((await f.adapter.testLogin()).ok, true); assert.equal(f.adapter.loginState, 'ready'); }
+  finally { await f.close(); }
+});
+
 test('一般登入遇忙碌關閉該次視窗並排背景重試，不再留下互斥保護', async () => {
   const f = await fixture({ autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: false, loggedIn: false }) });
   let closed = 0, keeps = 0;
