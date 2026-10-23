@@ -1092,25 +1092,26 @@ function renderAmazonJp(s){
   const a=s.japanAuctions&&s.japanAuctions.amazonJp||{},v=a.inventory||{};
   if(!amazonJpDirty){document.querySelector('#amazon-jp-enabled').checked=a.enabled!==false;document.querySelector('#amazon-jp-postal-code').value=a.postalCode||'100-0001';}
   const error=[a.lastError,a.lastBackgroundError,a.lastSearchWarning].filter(Boolean).join('｜'),state=document.querySelector('#amazon-jp-state');
-  state.textContent=a.enabled===false?'目前停止':a.backoffUntil?'限流降速中':a.continuousInventory?'全庫持續輪查中':'監控中';
+  state.textContent=a.enabled===false?'目前停止':a.backoffUntil||v.backoffUntil?'限流降速中':a.continuousInventory?'全庫持續輪查中':'監控中';
   state.className='pill '+(error?'bad':a.enabled!==false?'ok':'');
   const parts=['新品搜尋 '+(a.effectiveIntervalSeconds||20)+' 秒','商品庫 '+(v.trackedCount||0)+' 件','AOD 逐筆連續輪查'];
   if(v.currentCycle)parts.push('本輪 '+v.currentCycle.checked+'/'+v.currentCycle.total+' 件');
   if(v.lastCycle)parts.push('上輪實查 '+v.lastCycle.checked+' 件／'+(v.lastCycle.durationMs/1000).toFixed(1)+' 秒');
   if(v.neverVerified)parts.push('待首次驗證 '+v.neverVerified+' 件');
   if(v.failedCount)parts.push('最近失敗 '+v.failedCount+' 件');
+  if(v.restrictedCount)parts.push('最近受限 '+v.restrictedCount+' 件');
   if(v.deferredCount)parts.push('個別暫緩 '+v.deferredCount+' 件');
   if(v.delegatedCount)parts.push('單品分擔 '+v.delegatedCount+' 件');
   if(v.oldestOfferAgeSeconds!==null&&v.oldestOfferAgeSeconds!==undefined)parts.push('最舊驗證 '+v.oldestOfferAgeSeconds+' 秒前');
   parts.push('累計通知 '+(a.notificationSentCount||0)+' 則');
   if(a.lastScanAt)parts.push('搜尋最近 '+fmt(a.lastScanAt));
-  if(a.backoffUntil)parts.push('降速至 '+fmt(a.backoffUntil));else if(a.nextScanAt)parts.push('下次搜尋 '+fmt(a.nextScanAt));
+  if(a.backoffUntil||v.backoffUntil)parts.push('降速至 '+fmt(a.backoffUntil||v.backoffUntil));else if(a.nextScanAt)parts.push('下次搜尋 '+fmt(a.nextScanAt));
   document.querySelector('#amazon-jp-summary').textContent=parts.join('｜');
   document.querySelector('#amazon-jp-error').textContent=error;
   const inventoryNode=document.querySelector('#amazon-jp-inventory-products');
   inventoryNode.innerHTML=(a.inventoryProducts||[]).map(item=>{
-    const failed=item.attempt&&item.attempt.status==='failed';
-    const status=failed?'讀取失敗（保留前值）':item.available===true?'最近可購':item.available===false?'最近無合格報價':'待 AOD 驗證';
+    const failed=item.attempt&&item.attempt.status==='failed',restricted=item.attempt&&item.attempt.status==='restricted';
+    const status=restricted?'限流暫緩（保留前值）':failed?'讀取失敗（保留前值）':item.available===true?'最近可購':item.available===false?'最近無合格報價':'待 AOD 驗證';
     const price=item.priceYen?'｜¥'+Number(item.priceYen).toLocaleString('en-US'):'';
     return '<div class="product-row"><div class="product-main"><div><a href="'+esc(item.url)+'" target="_blank" rel="noopener noreferrer"><strong>'+esc(item.code)+'｜'+esc(item.title)+'</strong></a><div class="product-meta">ASIN '+esc(item.asin)+'｜'+status+price+'</div><div class="product-meta">最近驗證 '+(item.lastOfferCheckedAt?fmt(item.lastOfferCheckedAt):'尚未')+(failed?'｜'+esc(item.attempt.errorCode)+'｜HTTP '+Number(item.attempt.httpStatus||0):'')+(item.attempt&&item.attempt.retryAt?'｜重試 '+fmt(item.attempt.retryAt):'')+(item.delegated?'｜單品分擔':'')+'</div></div></div></div>';
   }).join('')||'<p class="muted">等待收錄商品…</p>';

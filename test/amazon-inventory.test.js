@@ -128,6 +128,35 @@ test('cancel while AOD is in flight cannot overwrite inventory or deliver stale 
   assert.equal(f.storage.products[rows[0].asin].available, false); assert.equal(f.signals.length, 0);
 });
 
+test('real shared cooldown survives restart; after it expires a restricted ASIN cannot pin the queue head', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const f = fixture(t); let first = true;
+  f.monitor.verifyOffer = async p => {
+    f.calls.push(p.asin);
+    if (first) { first = false; throw Object.assign(Error('503'), { code: 'AMAZON_RATE_LIMITED', httpStatus: 503, retryAfterMs: 60000 }); }
+    return { ...p, available: false };
+  };
+  await assert.rejects(f.scan(), e => e.code === 'AMAZON_RATE_LIMITED');
+  assert.equal(f.storage.inventoryAttempts[rows[0].asin].status, 'restricted');
+  await assert.rejects(f.search(), e => e.code === 'AMAZON_RATE_LIMITED'); assert.equal(f.urls.length, 0);
+  const restarted = fixture(t, { storage: structuredClone(f.storage) });
+  await assert.rejects(restarted.scan(), e => e.code === 'AMAZON_RATE_LIMITED'); assert.equal(restarted.calls.length, 0);
+  t.mock.timers.tick(60001);
+  await restarted.scan(); assert.equal(restarted.calls[0], rows[1].asin);
+  for (let n = 0; n < 3; n++) await restarted.scan();
+  assert.deepEqual(restarted.calls, [rows[1].asin, rows[2].asin, rows[3].asin, rows[0].asin]);
+  assert.equal(restarted.storage.lastInventoryCycle.checked, 4);
+});
+
+test('upgrade preserves a genuine Retry-After recorded by the previous build without issuing a new request', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
+  const f = fixture(t); f.storage.recentReads = [{ at: new Date().toISOString(), asin: rows[0].asin, issue: 'AMAZON_RATE_LIMITED', httpStatus: 503, retryAfterMs: 180000 }];
+  await assert.rejects(f.scan(), e => e.code === 'AMAZON_RATE_LIMITED' && e.retryAfterMs > 179000);
+  assert.equal(f.calls.length, 0); assert.equal(f.storage.inventoryCycle, undefined);
+  assert.equal(f.storage.inventoryAttempts[rows[0].asin].status, 'restricted');
+  t.mock.timers.tick(180001); await f.scan(); assert.equal(f.calls[0], rows[1].asin);
+});
+
 test('healthy delegated single tasks are skipped temporarily, failed/stopped tasks return to fair full sweep', async t => {
   const f = fixture(t); f.delegated.add(rows[0].asin);
   for (let n = 0; n < 3; n++) await f.scan();

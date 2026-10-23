@@ -891,7 +891,17 @@ export class AmazonJapanMonitor {
         httpStatus: 200, decision: verified.diagnostic?.decision || (verified.available ? 'qualified' : 'unavailable') };
       return true;
     } catch (error) {
-      if (['AMAZON_RATE_LIMITED', 'AMAZON_VERIFICATION_REQUIRED', 'AMAZON_LOGIN_REQUIRED', 'AMAZON_READ_CANCELLED'].includes(error.code)) throw error;
+      if (error.code === 'AMAZON_READ_CANCELLED') throw error;
+      if (['AMAZON_RATE_LIMITED', 'AMAZON_VERIFICATION_REQUIRED', 'AMAZON_LOGIN_REQUIRED'].includes(error.code)) {
+        const delay = error.httpStatus === 429 || error.httpStatus === 503
+          ? Math.max(60_000, error.retryAfterMs || 0) : Math.max(0, Number(error.retryAfterMs) || 60_000);
+        storage.inventoryBackoffUntil = new Date(Math.max(Date.parse(storage.inventoryBackoffUntil || '') || 0, Date.now() + delay)).toISOString();
+        // Retain the pending ASIN, but record its attempt so a single restricted
+        // product cannot stay at the head forever after the shared cooldown.
+        attempts[product.asin] = { at: new Date().toISOString(), durationMs: Date.now() - started, status: 'restricted',
+          httpStatus: error.httpStatus || 0, errorCode: error.code, retryAt: storage.inventoryBackoffUntil };
+        throw error;
+      }
       attempts[product.asin] = { at: new Date().toISOString(), durationMs: Date.now() - started, status: 'failed',
         httpStatus: error.httpStatus || 0, errorCode: error.code || 'AMAZON_READ_FAILED',
         retryAt: new Date(Date.now() + amazonInventoryRetryMs(error)).toISOString() };
@@ -905,6 +915,27 @@ export class AmazonJapanMonitor {
     else await this.state.save();
   }
 
+  assertInventoryReadAllowed() {
+    const storage = this.storage(), now = Date.now();
+    // Persist the scope cooldown across reloads, including upgrading from the
+    // earlier build which only saved sanitized HTTP diagnostics.
+    const restrictions = (storage.recentReads || []).filter(r => r.issue === 'AMAZON_RATE_LIMITED' || r.issue === 'rate_limited');
+    const attempts = storage.inventoryAttempts ||= {};
+    for (const read of restrictions) {
+      if (/^[A-Z0-9]{10}$/.test(read.asin || '') && Date.parse(read.at) > (Date.parse(attempts[read.asin]?.at || '') || 0)) {
+        attempts[read.asin] = { at: read.at, status: 'restricted', httpStatus: read.httpStatus, errorCode: 'AMAZON_RATE_LIMITED',
+          retryAt: new Date(Date.parse(read.at) + Math.max(60_000, read.retryAfterMs || 0)).toISOString() };
+      }
+    }
+    const until = Math.max(Date.parse(storage.inventoryBackoffUntil || '') || 0,
+      ...restrictions.map(r => (Date.parse(r.at) || 0) + Math.max(60_000, r.retryAfterMs || 0)));
+    if (until > now) {
+      storage.inventoryBackoffUntil = new Date(until).toISOString();
+      throw Object.assign(new Error('日亞工作階段仍在冷卻'), { code: 'AMAZON_RATE_LIMITED', retryAfterMs: until - now });
+    }
+    storage.inventoryBackoffUntil = '';
+  }
+
   deliverInventoryNotifications() {
     if (!Object.keys(this.storage().pendingAvailabilityNotifications || {}).length) return;
     if (Date.parse(this.storage().notificationRetryAt || '') > Date.now()) return;
@@ -916,6 +947,7 @@ export class AmazonJapanMonitor {
     this.backgroundRunning = true; this.closed = false;
     const storage = this.storage(), events = new Map();
     try {
+      this.assertInventoryReadAllowed();
       await this.ensureSeedSignals();
       const registry = this.inventoryRegistry(), delegated = this.getDelegatedAsins();
       const eligible = amazonInventoryCandidates(registry, storage.inventoryAttempts, delegated);
@@ -959,6 +991,7 @@ export class AmazonJapanMonitor {
     this.running = true; this.closed = false;
     const storage = this.storage(), events = new Map();
     try {
+      this.assertInventoryReadAllowed();
       await this.ensureSeedSignals(); this.inventoryRegistry();
       const beforeCount = Object.keys(storage.productRegistry || {}).length;
       const tick = (Number(storage.inventoryDiscoveryTick) || 0) + 1;
@@ -1313,6 +1346,8 @@ export class AmazonJapanMonitor {
     const inventory = { version: 1, trackedCount: inventoryProducts.length,
       neverVerified: inventoryProducts.filter(p => !p.lastOfferCheckedAt).length,
       failedCount: inventoryProducts.filter(p => p.attempt?.status === 'failed').length,
+      restrictedCount: inventoryProducts.filter(p => p.attempt?.status === 'restricted').length,
+      backoffUntil: storage.inventoryBackoffUntil || null,
       deferredCount: inventoryProducts.filter(p => Date.parse(p.attempt?.retryAt || '') > now).length,
       delegatedCount: inventoryProducts.filter(p => p.delegated).length,
       oldestOfferAgeSeconds: ages.length ? Math.max(0, Math.round((now - Math.min(...ages)) / 1000)) : null,
