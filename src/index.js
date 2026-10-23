@@ -44,6 +44,7 @@ import {
 } from './amazon-jp-monitor.js';
 import { AmazonJpProductOrderMonitor, normalizeAmazonJpProductUrl, normalizeAmazonJpProductMode } from './amazon-jp-product-order.js';
 import { AmazonOrderHistory } from './amazon-order-history.js';
+import { amazonInventoryNextDelay } from './amazon-inventory.js';
 import { ensureJapanStoreTargets } from './japan-stores.js';
 import { isTcsbSearchTarget, TCSB_BASELINE_VERSION } from './tcsb-monitor.js';
 import { checkDiscordConnection, hasDiscordWebhook } from './discord.js';
@@ -905,10 +906,10 @@ const edionBrowser = new EdionBrowserBridge({
 });
 const amazonReadScheduler = new AmazonReadScheduler();
 let amazonJpBackgroundTimer = null;
-let amazonJpBackgroundRotationAt = 0;
 const amazonJapanMonitor = new AmazonJapanMonitor({
   dataDir,
   state,
+  continuousInventory: true,
   readScheduler: amazonReadScheduler,
   getDelegatedAsins: () => new Set(amazonJpProductOrders.filter(monitor => {
     const saved = monitor.storage();
@@ -2113,20 +2114,18 @@ function clearAmazonJpSchedule({ background = true } = {}) {
   }
 }
 
-function scheduleAmazonJpBackground(delayMs = 5000) {
+function scheduleAmazonJpBackground(delayMs = 1000) {
   if (amazonJpBackgroundTimer || !config.amazonJp.enabled) return;
   amazonJpBackgroundTimer = setTimeout(async () => {
     const startedAt = Date.now();
-    let nextDelay = Math.min(20, Math.max(15, config.amazonJp.intervalSeconds || 20)) * 1000;
+    let nextDelay = 1000;
     try {
       if (config.amazonJp.enabled) {
-        const rotateBackground = Date.now() - amazonJpBackgroundRotationAt >= 30_000;
-        await amazonJapanMonitor.scan({ lane: 'background', rotateBackground });
-        if (rotateBackground) amazonJpBackgroundRotationAt = Date.now();
-        nextDelay = Math.max(250, nextDelay - (Date.now() - startedAt));
+        await amazonJapanMonitor.scan({ lane: 'background' });
+        nextDelay = amazonInventoryNextDelay(startedAt, Date.now());
       }
     } catch (error) {
-      nextDelay = Math.max(60_000, error.retryAfterMs || 0);
+      nextDelay = amazonInventoryNextDelay(startedAt, Date.now(), error);
       log(`日亞背景複查失敗：${error.message}｜類別 ${error.code || 'AMAZON_SCAN_FAILED'}｜${Math.ceil(nextDelay / 1000)} 秒後重試。`, 'japan');
     } finally {
       amazonJpBackgroundTimer = null;

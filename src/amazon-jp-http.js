@@ -449,9 +449,9 @@ export class AmazonJpHttpClient {
       if ($('#ap_email, #ap_password, form[name="signIn"]').length) throw fail('此流程顯示官方登入表單，請開啟登入視窗核對', 'AMAZON_LOGIN_REQUIRED');
       if (status === 404) {
         if (this.checkoutEvidenceStarted) throw fail('日亞結帳入口回傳 HTTP 404，尚未取得安全結帳頁；保留證據，不重送', 'AMAZON_CHECKOUT_NOT_FOUND');
-        throw fail('日亞 API 商品／頁面不存在', 'AMAZON_PRODUCT_NOT_FOUND');
+        throw Object.assign(fail('日亞 API 商品／頁面不存在', 'AMAZON_PRODUCT_NOT_FOUND'), { httpStatus: status });
       }
-      if (status !== 200) throw fail(`日亞 HTTP ${status}，未取得可用契約`);
+      if (status !== 200) throw Object.assign(fail(`日亞 HTTP ${status}，未取得可用契約`), { httpStatus: status });
       const durationMs = Math.round(performance.now() - started);
       // Do not store query strings or flow/session IDs in timing telemetry.
       // Polling already records quoteMs in the snapshot; do not add another

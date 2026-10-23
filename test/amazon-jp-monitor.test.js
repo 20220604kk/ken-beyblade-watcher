@@ -163,7 +163,7 @@ test('日亞品牌頁只擷取商品 ASIN 並轉成固定官方賣家網址', ()
   assert.equal(products[0].url, canonicalAmazonJapanUrl('B0H861Y9Y3'));
 });
 
-test('只解析日圓搜尋價，TWD 在比較官方定價前會被拒絕', () => {
+test('搜尋保留無日圓價格的 ASIN，僅作發現，不當作可購報價', () => {
   const yen = parseAmazonSellerSearch(`
     <div data-component-type="s-search-result" data-asin="B0H861Y9Y3"><h2>BEYBLADE X UX-21</h2><span class="a-price"><span class="a-offscreen">￥4,500</span></span></div>
   `);
@@ -171,7 +171,9 @@ test('只解析日圓搜尋價，TWD 在比較官方定價前會被拒絕', () =
     <div data-component-type="s-search-result" data-asin="B0H861Y9Y3"><h2>BEYBLADE X UX-21</h2><span class="a-price"><span class="a-offscreen">TWD 900</span></span></div>
   `);
   assert.equal(yen[0].priceYen, 4500);
-  assert.equal(twd.length, 0);
+  assert.equal(twd.length, 1);
+  assert.equal(twd[0].priceYen, null);
+  assert.equal(twd[0].available, false);
 });
 
 test('日亞官方價容許一日圓尾差，但拒絕真正溢價', () => {
@@ -250,17 +252,16 @@ test('重複型號無法由名稱唯一對應時採取 fail-closed', () => {
   assert.equal(matchTakaraTomyCatalog({ code: 'BX-00', title: 'BEYBLADE X BX-00 限定品' }, catalog), null);
 });
 
-test('X 只作交叉驗證標記，通知列出自營報價且不假稱 TT 定價驗證', () => {
+test('通知只列商品價格與連結，省略價格依據、販售者及交叉驗證三行', () => {
   assert.equal(extractAmazonAsin('https://www.amazon.co.jp/dp/B0D6MZB1VF?aod=1&tag=bey_sokuhou-22'), 'B0D6MZB1VF');
   const message = amazonJapanNotification({
     asin: 'B0H861Y9Y3', code: 'UX-21', title: 'UX-21 ヘルズネザー', priceYen: 4300, msrpYen: 4500,
     url: canonicalAmazonJapanUrl('B0H861Y9Y3'), imageUrl: 'https://m.media-amazon.com/images/I/ux21.jpg'
   }, { xConfirmed: true });
   const serialized = JSON.stringify(message);
-  assert.match(serialized, /X @bey_sokuhou/);
   assert.match(serialized, /Amazon\.co\.jp/);
   assert.match(serialized, /約 NT\$/);
-  assert.doesNotMatch(serialized, /4,500/); assert.match(serialized, /不對照 TT 定價/);
+  assert.doesNotMatch(serialized, /4,500|價格依據：|販售者：|交叉驗證：|不對照 TT 定價/);
   assert.equal(message.options.embeds[0].thumbnail.url, 'https://m.media-amazon.com/images/I/ux21.jpg');
   assert.doesNotMatch(serialized, /x\.com|twitter\.com/);
 });
@@ -279,8 +280,8 @@ test('日亞原價測試可選 BX-52 與 BX-53，價格與 ASIN 各自正確且�
     assert.equal(notice.options.embeds[0].url, canonicalAmazonJapanUrl(asin));
     assert.match(JSON.stringify(notice), /本機測試・不是真實補貨/);
     assert.match(JSON.stringify(notice), /前往 Amazon\.co\.jp 真實商品頁/);
-    assert.match(JSON.stringify(notice), /測試情境；未即時核對/);
-    assert.match(JSON.stringify(notice), /X @bey_sokuhou/);
+    assert.match(JSON.stringify(notice), /價格與可購狀態為模擬/);
+    assert.doesNotMatch(JSON.stringify(notice), /交叉驗證：|X @bey_sokuhou/);
     assert.doesNotMatch(JSON.stringify(notice), /賣家 ID 已核對/);
     assert.doesNotMatch(JSON.stringify(notice), /1999\.co\.jp/);
   }
