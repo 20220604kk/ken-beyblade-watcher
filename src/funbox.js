@@ -762,13 +762,17 @@ export class FunboxMonitor {
         products: observedProducts
       };
     } catch (error) {
+      const timedOut = ['TimeoutError', 'AbortError'].includes(error.name)
+        || /timeout|timed?\s*out|aborted due to timeout/i.test(error.message)
+        || error.cause?.code === 'UND_ERR_CONNECT_TIMEOUT';
       return {
         ...source,
         ok: false,
         durationMs: Date.now() - startedAt,
         productCount: 0,
         products: [],
-        error: error.message,
+        error: timedOut ? `連線或讀取逾時（等待上限 ${((source.timeoutMs || this.sourceTimeoutMs) / 1000).toFixed(1)} 秒）` : error.message,
+        errorCode: timedOut ? 'FUNBOX_SOURCE_TIMEOUT' : error.code || '',
         retryAfterMs: error.retryAfterMs || 0
       };
     }

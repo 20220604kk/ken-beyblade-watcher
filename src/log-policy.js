@@ -38,6 +38,8 @@ export class OperationalLogPolicy {
   accept(message, channel = 'system', now = Date.now()) {
     const classification = classifyLog(message);
     if (classification.kind !== 'error') return String(message);
+    // Every scan outcome is a heartbeat, including repeated failures.
+    if (/掃描(?:完成|失敗)/.test(String(message))) return String(message);
     // Strip only the line timestamp, never account/product IDs or error codes.
     const key = `${channel}:${String(message).replace(/^\[[^\]]+\]\s*/, '')}`;
     const previous = this.errors.get(key);

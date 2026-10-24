@@ -25,6 +25,16 @@ test('連續無變化掃描逐輪顯示開始及完成，明確分辨快取與�
   assert.match(completed[1], /合成來源：沿用快取/);
 });
 
+test('FUNBOX 來源逾時使用中文及實際上限，不把失敗當空清單或成功', async () => {
+  const monitor = new FunboxMonitor({ state: { data: {}, save: async () => {} },
+    sources: [{ id: 'search', url: 'https://shop.funbox.com.tw/search/search.json', timeoutMs: 1800 }],
+    fetcher: async () => { throw Object.assign(Error('The operation was aborted due to timeout'), { name: 'TimeoutError' }); } });
+  const result = await monitor.fetchSource(monitor.sources[0]);
+  assert.equal(result.ok, false); assert.equal(result.errorCode, 'FUNBOX_SOURCE_TIMEOUT');
+  assert.match(result.error, /連線或讀取逾時.*1.8 秒/);
+  await assert.rejects(monitor.scan(), /所有資料源失敗.*連線或讀取逾時/);
+});
+
 test('Funbox 互動測試可自訂點擊網址與 Discord 商品縮圖', () => {
   const product = normalizeFunboxSimulationProduct({
     title: 'BEYBLADE X 戰鬥陀螺 CX-13 龍王閃擊',

@@ -49,6 +49,12 @@ test('重複錯誤五分鐘節流，來源與帳號隔離並限制記憶體', ()
   assert.ok(policy.accept('帳號 A 登入失敗', 'japan', 300001));
   assert.equal(policy.errors.size, 2);
 });
+
+test('每輪掃描失敗也立即顯示，不以五分鐘重複錯誤合併隱藏運作狀態', () => {
+  const policy = new OperationalLogPolicy(), text = 'Funbox 官網掃描失敗：集合頁 API 連線或讀取逾時';
+  assert.equal(policy.accept(text, 'funbox', 0), text);
+  assert.equal(policy.accept(text, 'funbox', 2000), text);
+});
 test('歷史清理：預覽不寫，僅清理過往 log，保護訂單、續行、活動檔與未知日期', async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), 'ken-log-policy-'));
   try {
