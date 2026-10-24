@@ -601,6 +601,9 @@ const runtime = {
     : null,
   nextFunboxAt: null,
   funboxScanning: false,
+  funboxScanStartedAt: null,
+  funboxLastAttemptAt: null,
+  funboxLastScanError: '',
   funboxBoostUntil: null,
   funboxBoostProductCount: 0,
   lastFunboxSandboxScan: state.data.commerce?.funboxSandbox?.lastScanAt
@@ -1843,6 +1846,7 @@ function scheduleFunbox({ immediate = false, delayMs = null } = {}) {
     await syncAutoPurchaseWindowState().catch((error) => log(`登入心跳排程更新失敗：${error.message}`, 'funbox'));
     runtime.funboxScanning = true;
     const scanStartedAtMs = Date.now();
+    runtime.funboxScanStartedAt = new Date(scanStartedAtMs).toISOString();
     let scanFailed=false, retryAfterMs=0;
     try {
       runtime.lastFunboxScan = await funboxMonitor.scan({
@@ -1852,13 +1856,16 @@ function scheduleFunbox({ immediate = false, delayMs = null } = {}) {
       enqueueFunboxAutoPurchase(runtime.lastFunboxScan);
       updateFunboxBoost(runtime.lastFunboxScan);
       scanFailed=Boolean(runtime.lastFunboxScan.errors?.length);
+      runtime.funboxLastScanError = runtime.lastFunboxScan.errors?.join('；') || '';
       retryAfterMs=Math.max(0,funboxMonitor.cooldownUntil-Date.now());
     } catch (error) {
       scanFailed=true;retryAfterMs=error.retryAfterMs||0;
       runtime.lastError = `Funbox 官網：${error.message}`;
+      runtime.funboxLastScanError = error.message;
       log(`Funbox 官網掃描失敗：${error.message}`, 'funbox');
     } finally {
       runtime.funboxScanning = false;
+      runtime.funboxLastAttemptAt = new Date().toISOString();
       if (config.funbox.enabled) {
         const intervalMs = effectiveFunboxIntervalSeconds(Date.now()) * 1000;
         scheduleFunbox({
@@ -2831,6 +2838,9 @@ const dashboard = createDashboard({
       ...config.funbox,
       nextScanAt: runtime.nextFunboxAt,
       scanning: runtime.funboxScanning,
+      scanStartedAt: runtime.funboxScanStartedAt,
+      lastAttemptAt: runtime.funboxLastAttemptAt,
+      lastScanError: runtime.funboxLastScanError,
       withinActiveHours: isWithinActiveHours(
         new Date(),
         config.funbox.activeHours.start,

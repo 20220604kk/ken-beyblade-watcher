@@ -4331,12 +4331,17 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         this._markLoginProblem(esliteApiError(stored.reason || '會員 API 暫時無法確認', 'unknown'), 'unknown');
         return { ok: false, pending: false, message: this.lastVerifyError };
       }
-      const manualEntry = interactive && (this.manualLoginRequired || this.sessionRecoveryState === 'manual_required'
-        || Date.now() < this.sessionRecoveryAfterMs);
+      const manualEntry = interactive && (this.manualLoginRequired || this.sessionRecoveryState === 'manual_required');
       if (manualEntry) {
-        // A user clicking Login must be able to reach the official page while
-        // background recovery is paused. Do not reset the pause or auto-submit.
+        // Only an actual official verification gate needs a manual window.
         manualOnly = true;
+      } else if (Date.now() < this.sessionRecoveryAfterMs) {
+        const remaining = this.sessionRecoveryAfterMs - Date.now();
+        this.sessionRecoveryState = 'retry_pending';
+        this._scheduleHeartbeat(remaining);
+        return { ok: false, pending: false, retryScheduled: true,
+          nextRetryAt: new Date(this.sessionRecoveryAfterMs).toISOString(),
+          message: `自動登入冷卻中，${Math.ceil(remaining / 1000)} 秒後背景自動重試；不需手動按登入。` };
       } else {
         try {
           await this._recoverApiSession(); this._markLoginReady();
@@ -4375,7 +4380,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         return { ok: false, pending: false, message: this.lastVerifyError };
       }
       if (error.purchaseStatus === 'login_busy') {
-        if (this.autoLoginEnabled && !manualOnly) return this._closeBusyLoginForRetry(error, context);
+        if (this.autoLoginEnabled) return this._closeBusyLoginForRetry(error, context);
         this._deferBusyLogin(error);
         if (!interactive) {
           await context.close().catch(() => {});
@@ -4391,9 +4396,26 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
         await this._persistLoginRecovery();
         return this._keepInteractiveLogin({
           context, page, sessionFile: this.sessionFile, label: '誠品', error,
-          keepOnBusy: manualOnly || !this.autoLoginEnabled,
+          keepOnBusy: !this.autoLoginEnabled,
           watchSameUrl: true, checkIntervalMs: 10000,
-          validate: async (targetPage) => { await this._validateBrowserLoginApi(targetPage); return true; },
+          validate: async (targetPage) => {
+            try { await this._validateBrowserLoginApi(targetPage); return true; }
+            catch (cause) {
+              const session = this.interactiveLogin;
+              if (session?.page !== targetPage) return false;
+              const state = await readEsliteLoginState(targetPage);
+              if (this.interactiveLogin !== session) return false;
+              if (state.status === 'login_busy' && this.autoLoginEnabled) {
+                await this._closeBusyLoginForRetry(esliteApiError(state.message, 'login_busy'), context);
+                return false;
+              }
+              if (state.status === 'human_required') {
+                this.manualLoginRequired = true; this.sessionRecoveryState = 'manual_required';
+                await this._persistLoginRecovery();
+              }
+              throw cause;
+            }
+          },
           onValidated: async () => { await this._disposeApiContext(); this.sessionRecoveryState = 'idle'; this.manualLoginRequired = false; this._markLoginReady(); },
           onAfterClose: () => this.onLoginValidated()
         });
@@ -4436,7 +4458,7 @@ export class EslitePurchaseAdapter extends BrowserPurchaseAdapter {
           this.accountPreparationError = '';
         }
         if (state.status === 'login_busy') {
-          if (this.autoLoginEnabled && !session.keepOnBusy) {
+          if (this.autoLoginEnabled) {
             return this._closeBusyLoginForRetry(esliteApiError(state.message, 'login_busy'), session.context);
           }
           this._deferBusyLogin(esliteApiError(state.message, 'login_busy'));

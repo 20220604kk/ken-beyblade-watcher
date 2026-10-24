@@ -782,6 +782,7 @@ export class FunboxMonitor {
     if (this.running) return { skipped: true };
     this.running = true;
     const startedAt = new Date();
+    this.log(`${this.logLabel}開始掃描：分類、集合、搜尋來源；等待本輪回應。`, 'funbox');
     try {
       this.state.data.commerce ||= {};
       const previous = this.state.data.commerce[this.stateKey] || { initialized: false, seen: {} };
@@ -1088,7 +1089,9 @@ export class FunboxMonitor {
       };
       this.log(
         `${this.logLabel}掃描完成：目前 ${products.length} 件，新發現 ${newProducts.length} 件，`
-        + `庫存變動 ${stockChanged} 件，通知 ${notified} 則。`,
+        + `庫存變動 ${stockChanged} 件，通知 ${notified} 則。`
+        + `｜耗時 ${Date.now() - startedAt.getTime()}ms｜` + sourceResults.map(source =>
+          `${source.label}：${!source.ok ? '讀取失敗' : source.skipped ? '沿用快取' : source.notModified ? '官網確認未變' : '已讀取'} ${source.productCount || 0} 件`).join('／'),
         'funbox'
       );
       return result;

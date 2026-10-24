@@ -276,7 +276,7 @@ test('手動登入模式只預填，不自動送出帳密或保存未驗證 sess
   } finally { await f.close(); }
 });
 
-test('手動入口不被背景冷卻擋住；忙碌時保留明確要求的專用視窗', async () => {
+test('明確手動入口只預填；自動模式仍會關閉忙碌視窗並安排重試', async () => {
   let launches = 0, closes = 0, kept;
   const f = await fixture({ autoLoginEnabled: true });
   const context = { newPage: async () => ({}), close: async () => { closes++; } };
@@ -287,14 +287,15 @@ test('手動入口不被背景冷卻擋住；忙碌時保留明確要求的專�
     throw Object.assign(new Error('系統忙碌'), { purchaseStatus: 'login_busy' }); };
   f.adapter._keepInteractiveLogin = async options => { kept = options; return { ok: false, pending: true }; };
   try {
-    assert.equal((await f.adapter.testLogin({ manualOnly: true })).pending, true);
-    assert.equal(launches, 1); assert.equal(closes, 0); assert.equal(kept.context, context);
+    const result = await f.adapter.testLogin({ manualOnly: true });
+    assert.equal(result.pending, false); assert.equal(result.retryScheduled, true);
+    assert.equal(launches, 1); assert.equal(closes, 1); assert.equal(kept, undefined);
     assert.equal(f.adapter.loginState, 'unknown'); assert.equal(f.adapter.manualLoginRequired, false);
     await assert.rejects(f.adapter.testLogin({ manualOnly: true, interactive: false }), e => e.purchaseStatus === 'needs_setup');
   } finally { await f.close(); }
 });
 
-for (const accountSlot of ['B', 'C', 'D', 'E']) test(`${accountSlot} 一般登入按鈕遇背景冷卻改開手動視窗，不重送帳密或清除冷卻`, async () => {
+for (const accountSlot of ['B', 'C', 'D', 'E']) test(`${accountSlot} 一般登入冷卻結束自動重試，不再強迫使用者開手動視窗按登入`, async () => {
   const f = await fixture({ accountSlot, autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: false, loggedIn: false }) });
   let launches = 0, kept;
   const context = { newPage: async () => ({}), close: async () => {} };
@@ -309,7 +310,8 @@ for (const accountSlot of ['B', 'C', 'D', 'E']) test(`${accountSlot} 一般登�
   f.adapter._keepInteractiveLogin = async options => { kept = options; return { ok: false, pending: true, message: '手動視窗已開啟' }; };
   try {
     const result = await f.adapter.testLogin();
-    assert.equal(result.pending, true); assert.equal(launches, 1); assert.equal(kept.keepOnBusy, true);
+    assert.equal(result.pending, false); assert.equal(result.retryScheduled, true); assert.equal(launches, 0); assert.equal(kept, undefined);
+    assert.equal(Date.parse(result.nextRetryAt), deadline); assert.match(result.message, /不需手動/);
     assert.equal(f.adapter.sessionRecoveryAfterMs, deadline); assert.equal(f.adapter.loginAttemptSubmitted, false);
     assert.equal(f.adapter.accountSlot, accountSlot);
   } finally { await f.close(); }
@@ -368,6 +370,24 @@ test('一般登入保留真正人工驗證視窗，不把它當忙碌自動重�
   } finally { await f.close(); }
 });
 
+test('保留視窗的背景監看遇官方忙碌，自行關閉並排重試，不依賴使用者按完成檢查', async () => {
+  const f = await fixture({ autoLoginEnabled: true, apiSessionVerifier: async () => ({ ok: false, loggedIn: false }) });
+  let closed = 0, kept;
+  const page = { locator: () => ({ innerText: async () => '系統忙碌中，請稍候再試' }) };
+  const context = { newPage: async () => page, close: async () => { closed++; } };
+  const challenge = () => Object.assign(Error('官方顯示驗證'), { purchaseStatus: 'human_required' });
+  f.adapter._recoverApiSession = async () => { throw challenge(); };
+  f.adapter._loginContext = async () => context; f.adapter._login = async () => { throw challenge(); };
+  f.adapter._validateBrowserLoginApi = async () => { throw Object.assign(Error('expired'), { purchaseStatus: 'needs_login' }); };
+  f.adapter._keepInteractiveLogin = async opts => { kept = opts; f.adapter.interactiveLogin = { context, page }; return { ok: false, pending: true }; };
+  try {
+    await f.adapter.testLogin(); assert.equal(kept.keepOnBusy, false);
+    assert.equal(await kept.validate(page), false);
+    assert.equal(closed, 1); assert.equal(f.adapter.interactiveLogin, null);
+    assert.equal(f.adapter.sessionRecoveryState, 'retry_pending'); assert.ok(f.adapter.sessionRecoveryAfterMs > Date.now());
+  } finally { await f.close(); }
+});
+
 for (const keepOnBusy of [false, true]) test(`既有忙碌視窗完成檢查：keepOnBusy=${keepOnBusy}`, async () => {
   const f = await fixture({ autoLoginEnabled: true }); let closed = 0;
   const context = { close: async () => { closed++; } };
@@ -376,13 +396,9 @@ for (const keepOnBusy of [false, true]) test(`既有忙碌視窗完成檢查：k
   f.adapter._completeInteractiveLogin = async () => ({ ok: false, pending: true });
   try {
     const result = await f.adapter.completeLogin();
-    assert.equal(result.pending, keepOnBusy);
-    if (keepOnBusy) {
-      assert.equal(closed, 0); assert.equal(f.adapter.interactiveLogin, session); assert.match(result.message, /關閉後才可背景/);
-    } else {
-      assert.equal(closed, 1); assert.equal(result.retryScheduled, true); assert.equal(f.adapter.interactiveLogin, null);
-      assert.equal(f.adapter.loginBrowserContext, null); assert.equal(f.adapter.sessionRecoveryState, 'retry_pending');
-    }
+    assert.equal(result.pending, false);
+    assert.equal(closed, 1); assert.equal(result.retryScheduled, true); assert.equal(f.adapter.interactiveLogin, null);
+    assert.equal(f.adapter.loginBrowserContext, null); assert.equal(f.adapter.sessionRecoveryState, 'retry_pending');
   } finally { await f.close(); }
 });
 

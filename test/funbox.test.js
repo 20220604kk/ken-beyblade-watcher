@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { OperationalLogPolicy } from '../src/log-policy.js';
 import {
   FunboxMonitor, formatFunboxNotification, funboxDiscordPreview,
   canonicalFunboxProductId, migrateFunboxSeenRecords,
@@ -8,6 +9,21 @@ import {
   funboxStockDiscordPreview, parseFunboxProductData, parseFunboxProducts, parseFunboxSearchData,
   shouldSkipFunboxProduct, validateFunboxSourceBody
 } from '../src/funbox.js';
+
+test('連續無變化掃描逐輪顯示開始及完成，明確分辨快取與官網讀取', async () => {
+  const visible = [], policy = new OperationalLogPolicy(), state = { data: {}, save: async () => {} };
+  const monitor = new FunboxMonitor({ state, sources: [{ id: 'fixture', label: '合成來源', url: 'https://shop.funbox.com.tw/products.json', intervalMs: 9000 }],
+    fetcher: async () => Response.json([{ id: 123, url: '/products/bx-test', title: 'BEYBLADE X BX-01', price: 350,
+      variants: [{ id: 100, inventory_quantity: 0, inventory_policy: 'deny' }] }]),
+    notify: async () => assert.fail('unchanged scan must not notify'),
+    log: (message, channel) => { const text = policy.accept(message, channel); if (text) visible.push(text); } });
+  await monitor.scan(); visible.length = 0; monitor.sourceCache.clear();
+  await monitor.scan(); await monitor.scan();
+  assert.equal(visible.filter(x => x.includes('開始掃描')).length, 2);
+  const completed = visible.filter(x => x.includes('掃描完成'));
+  assert.equal(completed.length, 2); assert.match(completed[0], /新發現 0.*庫存變動 0.*合成來源：已讀取/);
+  assert.match(completed[1], /合成來源：沿用快取/);
+});
 
 test('Funbox 互動測試可自訂點擊網址與 Discord 商品縮圖', () => {
   const product = normalizeFunboxSimulationProduct({

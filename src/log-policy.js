@@ -1,6 +1,6 @@
 // Operational text only. Purchase records, ledgers and checkout evidence never
 // pass through this retention policy. Unknown messages are kept conservatively.
-export const LOG_RETENTION = Object.freeze({ eventDays: 30, errorDays: 14, systemDays: 14 });
+export const LOG_RETENTION = Object.freeze({ eventDays: 30, errorDays: 14, systemDays: 14, routineDays: 14 });
 const ERROR = /失敗|錯誤|逾時|超時|限流|阻擋|無法|結果不明|待核對|error|exception|timed?\s*out|HTTP\s*[45]\d\d/i;
 const TRANSACTION = /訂單|送單|結帳|付款|轉帳|銀行|ATM|checkout|order[_ -]?(?:id|number|result)|submitted|transaction/i;
 const COUNT = /(?:新發現|新品|補貨|庫存變動|通知)\s*[：:]?\s*(\d+)/g;
@@ -14,10 +14,10 @@ export function classifyLog(message) {
   if (scanSummary && counts.length) {
     return counts.some(n => n > 0)
       ? { kind: 'event', days: LOG_RETENTION.eventDays }
-      : { kind: 'routine', days: 0 };
+      : { kind: 'routine', days: LOG_RETENTION.routineDays };
   }
   if (/本輪來源讀取\s*\d+\s*件|：讀取\s*\d+\s*件商品[。.]?\s*$|momo 詳細 API 專線確認|誠品來源讀到商品｜|近期已通知相同品項，略過重複推播/.test(text)) {
-    return { kind: 'routine', days: 0 };
+    return { kind: 'routine', days: LOG_RETENTION.routineDays };
   }
   if (/首次建立安全基線|新品訊號|庫存變動|補貨|推播送達|商品推播|發現新商品|已售罄，狀態已更新|前台可售.*→/.test(text)) {
     return { kind: 'event', days: LOG_RETENTION.eventDays };
@@ -37,7 +37,6 @@ export class OperationalLogPolicy {
 
   accept(message, channel = 'system', now = Date.now()) {
     const classification = classifyLog(message);
-    if (classification.kind === 'routine') return null;
     if (classification.kind !== 'error') return String(message);
     // Strip only the line timestamp, never account/product IDs or error codes.
     const key = `${channel}:${String(message).replace(/^\[[^\]]+\]\s*/, '')}`;

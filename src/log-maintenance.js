@@ -48,7 +48,7 @@ export async function maintainLogs({ root, now = new Date(), apply = false } = {
         const classification = classifyLog(block);
         const date = lineDate(block) || (namedDay ? new Date(`${namedDay}T00:00:00+08:00`) : null);
         const expired = classification.days !== null && date && now - date > classification.days * 86400000;
-        if (classification.kind === 'routine' || expired || !policy.accept(block, relative, date?.getTime() ?? now.getTime())) {
+        if (expired || !policy.accept(block, relative, date?.getTime() ?? now.getTime())) {
           report.removedEntries++; continue;
         }
         kept.push(block.replace(/[\r\n]+$/, ''));
